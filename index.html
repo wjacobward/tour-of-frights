@@ -1,0 +1,877 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Apex Tour of Frights</title>
+<meta name="description" content="Pick houses from the Apex Tour of Frights and open a custom Google Maps route.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Creepster&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --bg: #0f0c14;
+    --panel: #17121f;
+    --panel-2: #211a2c;
+    --line: #322841;
+    --text: #f1ebf7;
+    --muted: #a99dba;
+    --accent: #3de8ff;
+    --accent-ink: #04262c;
+    --orange: #ff8a1f;
+    --purple: #a974ff;
+    --green: #7fd63c;
+    --warn: #ffd23f;
+    --radius: 12px;
+    --font: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --display: "Creepster", "Atkinson Hyperlegible", cursive;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.4 var(--font);
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  #map { height: 100%; background: #0b0910; }
+
+  /* ---------- Panel ---------- */
+  .panel {
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .peek { padding: 16px 18px 14px; border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .brand h1 {
+    font: 400 30px/1.05 var(--display);
+    color: var(--orange);
+    margin: 0;
+    letter-spacing: .5px;
+    text-shadow: 0 0 18px rgba(255,138,31,.35);
+  }
+  .brand .when { color: var(--muted); font-size: 12.5px; text-align: right; white-space: nowrap; }
+  .summary { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .count { flex: 1; min-width: 120px; color: var(--muted); }
+  .count b { color: var(--text); font-size: 17px; }
+  .btn {
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    border-radius: 999px;
+    padding: 9px 14px;
+    text-decoration: none;
+    color: var(--text);
+    display: inline-flex; align-items: center; gap: 6px;
+    white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--muted); }
+  .btn.primary {
+    background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+    font-weight: 700;
+  }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn[aria-disabled="true"] { opacity: .4; pointer-events: none; }
+  .expand { display: none; }
+  .warning {
+    margin-top: 10px; padding: 8px 10px; border-radius: 8px;
+    background: rgba(255,210,63,.1); border: 1px solid rgba(255,210,63,.4);
+    color: var(--warn); font-size: 13px;
+  }
+  .hint { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+  .hint button { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; }
+
+  .body { overflow-y: auto; min-height: 0; flex: 1; padding-bottom: 24px; }
+  .section { padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  .section h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px;
+    color: var(--muted); margin: 0 0 10px; font-weight: 700;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .section h2 .aside { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .empty { color: var(--muted); font-size: 13.5px; margin: 0; }
+
+  ol.route, ul.stops { list-style: none; margin: 0; padding: 0; }
+  .row { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+  .row-main {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+    background: none; border: 0; padding: 5px 4px; text-align: left; border-radius: 8px;
+  }
+  .row-main:hover { background: var(--panel-2); }
+  .row-text { min-width: 0; display: flex; flex-direction: column; }
+  .row-text b { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-text small { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row.is-done .row-text b { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(169,157,186,.5); }
+  .row.is-done .ico-wrap { filter: grayscale(1); opacity: .55; }
+  .ord {
+    flex: none; width: 24px; height: 24px; border-radius: 50%;
+    background: var(--accent); color: var(--accent-ink);
+    font-weight: 700; font-size: 13px; display: grid; place-items: center;
+  }
+  .ico-wrap { position: relative; flex: none; width: 30px; height: 30px; border-radius: 50%;
+    border: 2px solid var(--c); display: grid; place-items: center; background: #1d1726; }
+  .ico-wrap svg { width: 22px; height: 22px; }
+  .bolt { color: var(--warn); font-size: 12px; flex: none; }
+  .icon-btn {
+    flex: none; width: 34px; height: 34px; border-radius: 50%;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    display: grid; place-items: center; font-size: 16px; line-height: 1;
+  }
+  .icon-btn:hover { border-color: var(--muted); color: var(--text); }
+  .icon-btn[aria-pressed="true"].add { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .icon-btn.seen { font-size: 11px; }
+  .icon-btn[aria-pressed="true"].seen { background: #3a3346; color: var(--text); border-color: #5a506a; }
+
+  details.group { margin-top: 4px; }
+  details.group summary {
+    cursor: pointer; padding: 6px 0; font-weight: 700; list-style: none;
+    display: flex; align-items: center; gap: 8px;
+  }
+  details.group summary::-webkit-details-marker { display: none; }
+  details.group summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+  details.group[open] summary::before { transform: rotate(90deg); }
+  details.group summary .swatch { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+  details.group summary small { color: var(--muted); font-weight: 400; }
+
+  /* Filters */
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--line); background: transparent;
+    border-radius: 999px; padding: 5px 12px 5px 6px; color: var(--muted);
+  }
+  .chip svg { width: 22px; height: 22px; }
+  .chip[aria-pressed="true"] { background: var(--panel-2); color: var(--text); border-color: var(--muted); }
+  .chip[aria-pressed="false"] svg { filter: grayscale(1); opacity: .45; }
+  .chip small { color: var(--muted); }
+  .filter-label { font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  .seg button { flex: 1; border: 0; background: transparent; padding: 7px 6px; color: var(--muted); font-size: 13px; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--panel-2); color: var(--text); font-weight: 700; }
+  .switch { display: flex; align-items: center; gap: 10px; margin-top: 14px; cursor: pointer; }
+  .switch input { width: 18px; height: 18px; accent-color: var(--accent); }
+
+  .footer { padding: 14px 18px; color: var(--muted); font-size: 12.5px; }
+  .footer p { margin: 0 0 8px; }
+  .footer .btn { font-size: 13px; padding: 6px 12px; }
+
+  /* ---------- Map pins ---------- */
+  .pin {
+    position: relative; width: 40px; height: 40px; border-radius: 50%;
+    background: #1d1726; border: 3px solid var(--c);
+    display: grid; place-items: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,.6);
+    transition: transform .12s, box-shadow .12s;
+  }
+  .pin svg.main { width: 28px; height: 28px; }
+  .pin svg.second { position: absolute; width: 18px; height: 18px; left: -6px; bottom: -4px; }
+  .pin .num {
+    position: absolute; top: -9px; right: -9px; min-width: 20px; height: 20px; padding: 0 5px;
+    border-radius: 10px; background: var(--accent); color: var(--accent-ink);
+    font: 700 12px/20px var(--font); text-align: center; display: none;
+  }
+  .pin .flash { position: absolute; bottom: -7px; right: -6px; font-size: 13px; color: var(--warn); text-shadow: 0 0 3px #000, 0 0 3px #000; }
+  .pin.sel { transform: scale(1.12); box-shadow: 0 0 0 3px var(--accent), 0 0 16px 4px rgba(61,232,255,.55); }
+  .pin.sel .num { display: block; }
+  .pin.done { filter: grayscale(1) brightness(.75); opacity: .5; }
+  .pin.done.sel { opacity: .85; }
+  .fanning .pin:not(.fanned) { opacity: .25; }
+  .pin.focus { outline: 2px solid #fff; outline-offset: 4px; }
+  .leaflet-marker-icon:focus-visible .pin { outline: 2px solid #fff; outline-offset: 3px; }
+  .you { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 3px solid #fff;
+    box-shadow: 0 0 0 6px rgba(61,232,255,.25); }
+
+  /* Leaflet theming */
+  .leaflet-container { font-family: var(--font); }
+  .leaflet-control-attribution { background: rgba(15,12,20,.75) !important; color: var(--muted); }
+  .leaflet-control-attribution a { color: #c9bfd8; }
+  .leaflet-bar a, .leaflet-bar a:hover { background: var(--panel); color: var(--text); border-bottom-color: var(--line); }
+  .leaflet-bar { border-color: var(--line) !important; }
+  .map-btn { font-size: 17px; line-height: 30px !important; }
+  .map-btn.on { color: var(--accent) !important; }
+
+  .card {
+    margin-top: 12px; padding: 12px; border-radius: var(--radius);
+    background: var(--panel-2); border: 1px solid var(--line); border-left: 4px solid var(--c);
+    display: grid; grid-template-columns: auto 1fr auto; gap: 0 10px; align-items: start;
+  }
+  .card .ico-wrap { width: 40px; height: 40px; }
+  .card .ico-wrap svg { width: 28px; height: 28px; }
+  .card h3 { margin: 0; font-size: 16.5px; line-height: 1.25; }
+  .card .meta { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .card .meta b { color: var(--c); font-weight: 700; }
+  .card .close { width: 28px; height: 28px; font-size: 15px; }
+  .card .more { grid-column: 2 / 4; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 10px; }
+  .tag { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; padding: 2px 8px 2px 4px;
+    border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); }
+  .tag svg { width: 18px; height: 18px; }
+  .tag.warn { color: var(--warn); border-color: rgba(255,210,63,.35); padding-left: 8px; }
+  .card-actions { display: flex; gap: 8px; }
+  .card-actions .btn { padding: 7px 12px; font-size: 13.5px; flex: 1; justify-content: center; }
+
+  .toast {
+    position: fixed; left: 50%; top: 16px; transform: translateX(-50%) translateY(-150%);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px;
+    padding: 8px 8px 8px 16px; display: flex; align-items: center; gap: 12px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.5); z-index: 2000; transition: transform .25s;
+    max-width: calc(100vw - 32px);
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast .btn { padding: 5px 12px; font-size: 13px; }
+
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+  /* ---------- Phone layout: map full screen, panel as bottom sheet ---------- */
+  @media (max-width: 860px) {
+    body { display: block; }
+    #map { position: fixed; inset: 0; }
+    .panel {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 1100;
+      border-left: 0; border-top: 1px solid var(--line);
+      border-radius: 18px 18px 0 0;
+      max-height: 82dvh;
+      box-shadow: 0 -8px 30px rgba(0,0,0,.5);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .peek { padding: 10px 16px 12px; border-bottom: 0; }
+    .grip { width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto 8px; }
+    .brand h1 { font-size: 26px; }
+    .expand { display: inline-flex; }
+    .body { display: none; border-top: 1px solid var(--line); }
+    .panel[data-expanded="true"] .body { display: block; }
+    .section, .footer { padding-left: 16px; padding-right: 16px; }
+    .leaflet-top { top: env(safe-area-inset-top); }
+  }
+  @media (min-width: 861px) { .grip { display: none; } }
+</style>
+</head>
+<body>
+
+<!-- Icon symbols, shared by map pins, lists and the house card -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="g-cc" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbf6ec"/><stop offset=".33" stop-color="#fbf6ec"/>
+      <stop offset=".33" stop-color="#ff8a1f"/><stop offset=".68" stop-color="#ff8a1f"/>
+      <stop offset=".68" stop-color="#ffc52e"/><stop offset="1" stop-color="#ffc52e"/>
+    </linearGradient>
+  </defs>
+  <symbol id="i-candycorn" viewBox="0 0 40 40">
+    <path d="M20 3c4 0 13 25 13 30 0 4-26 4-26 0C7 28 16 3 20 3z" fill="url(#g-cc)"/>
+  </symbol>
+  <symbol id="i-pumpkin" viewBox="0 0 40 40">
+    <ellipse cx="13" cy="24" rx="9" ry="12" fill="#e06c12"/>
+    <ellipse cx="27" cy="24" rx="9" ry="12" fill="#e06c12"/>
+    <ellipse cx="20" cy="24" rx="9.5" ry="13" fill="#ff922b"/>
+    <path d="M20 12V7c0-2 2-4 5-4" stroke="#5d9b2e" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <path d="M12 22l3.5-4.5L19 22zM21 22l3.5-4.5L28 22z" fill="#3b1704"/>
+    <path d="M11 27c5 6 13 6 18 0-5 2-13 2-18 0z" fill="#3b1704"/>
+  </symbol>
+  <symbol id="i-ghost" viewBox="0 0 40 40">
+    <path d="M8 35V17a12 12 0 0 1 24 0v18l-4-3-4 3-4-3-4 3-4-3z" fill="#f4f0e8"/>
+    <path d="M13 17l6 2.5-1.5 3.5c-3 0-4.5-2-4.5-6zM27 17l-6 2.5 1.5 3.5c3 0 4.5-2 4.5-6z" fill="#1d1726"/>
+    <ellipse cx="20" cy="27.5" rx="2" ry="2.5" fill="#1d1726"/>
+  </symbol>
+</svg>
+
+<div id="map" role="application" aria-label="Map of Tour of Frights houses"></div>
+
+<aside class="panel" id="panel" data-expanded="false">
+  <div class="peek">
+    <div class="grip" aria-hidden="true"></div>
+    <div class="brand">
+      <h1>Apex Tour of Frights</h1>
+      <div class="when">Apex, NC · Oct 10–31<br>Nightly 6–9 pm</div>
+    </div>
+    <div class="summary">
+      <div class="count" id="count" aria-live="polite"></div>
+      <a class="btn primary" id="open" target="_blank" rel="noopener">Open in Google Maps ↗</a>
+      <button class="btn expand" id="expand" aria-expanded="false" aria-controls="body">More ▴</button>
+    </div>
+    <div class="warning" id="warning" hidden></div>
+    <div class="hint" id="hint"></div>
+    <div id="card" aria-live="polite"></div>
+  </div>
+
+  <div class="body" id="body">
+    <section class="section">
+      <h2>Your route <span class="aside" id="clear-wrap"></span></h2>
+      <ol class="route" id="route"></ol>
+    </section>
+
+    <section class="section">
+      <h2>Filters <span class="aside" id="showing"></span></h2>
+      <div class="chips" id="rating-chips"></div>
+      <div class="filter-label">Flashing lights</div>
+      <div class="seg" id="flash-seg" role="group" aria-label="Flashing lights filter">
+        <button data-flash="all">Show all</button>
+        <button data-flash="noIntense">Hide intense ⚡⚡</button>
+        <button data-flash="none">Hide any ⚡</button>
+      </div>
+      <label class="switch"><input type="checkbox" id="hide-done"> Hide houses I've visited</label>
+    </section>
+
+    <section class="section">
+      <h2>All stops</h2>
+      <div id="groups"></div>
+    </section>
+
+    <div class="footer">
+      <p>⚡ slow or low flashing lights · ⚡⚡ fast or intense flashing lights.</p>
+      <p>Pins too close to tap? Tap the group to fan it out.</p>
+      <p>Opening a route marks its houses visited. Use “seen” on any stop to change that by hand. Saved in this browser only.</p>
+      <button class="btn" id="reset">Reset visited houses</button>
+    </div>
+  </div>
+</aside>
+
+<div class="toast" id="toast" role="status"><span id="toast-msg"></span><button class="btn" id="toast-btn" hidden></button></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// Data: from the town's three Google Maps route links + the 2026 flyer PDF.
+// flash: 0 none, 1 = * slow/low flashing, 2 = ** fast/intense flashing.
+// ---------------------------------------------------------------------------
+const ROUTES = {
+  orange: { label: 'Orange', color: 'var(--orange)' },
+  purple: { label: 'Purple', color: 'var(--purple)' },
+  green:  { label: 'Green',  color: 'var(--green)' },
+};
+const RATINGS = {
+  candycorn: { label: 'Candy corn', age: 'All ages' },
+  pumpkin:   { label: 'Pumpkin',    age: '5+' },
+  ghost:     { label: 'Ghost',      age: '13+' },
+};
+const H = (route, n, name, addr, lat, lng, rating, flash = 0) =>
+  ({ id: route[0] + n, route, n, name, addr, lat, lng, rating: [].concat(rating), flash });
+
+const HOUSES = [
+  H('orange', 1, 'Ghoulders Scream', '301 Knightsborough Way, Apex, NC 27502', 35.7413204, -78.860974, 'pumpkin', 1),
+  H('orange', 2, 'Blackburn Nightmare Before Christmas', '1205 Blackburn Rd, Apex, NC 27502', 35.746725, -78.8655014, 'pumpkin', 1),
+  H('orange', 3, 'Skeleton Invasion', '1238 Kelder Ln, Apex, NC 27523', 35.7607656, -78.8508688, 'ghost', 2),
+  H('orange', 4, 'Till Death Do Us Part', '2002 Henniker St, Apex, NC 27523', 35.7576168, -78.8774303, 'pumpkin'),
+  H('orange', 5, 'The Crypt on Colony Woods', '2208 Colony Woods Dr, Apex, NC 27523', 35.7572461, -78.8781541, 'candycorn'),
+  H('orange', 6, 'The Weavers Web', '2406 Bristers Spring Way, Apex, NC 27523', 35.7537632, -78.8828061, 'pumpkin'),
+  H('orange', 7, 'Dead End Cemetery', '1900 Loganwood Dr, Apex, NC 27523', 35.7558737, -78.8779538, 'candycorn', 1),
+  H('orange', 8, 'Superheros vs', '103 Cameron Glen Dr, Apex, NC 27502', 35.7365571, -78.8705544, 'candycorn'),
+  H('orange', 9, 'The Peak of Web Spinning', '105 Dunvegan Ct, Apex, NC 27502', 35.7358655, -78.871723, 'pumpkin'),
+  H('orange', 10, 'Ghouls In and Out of the Graveyard', '1134 Capitata Crossing, Apex, NC 27502', 35.7354037, -78.8725577, 'pumpkin'),
+  H('orange', 11, 'Thriller Nights', '1143 Capitata Crossing, Apex, NC 27502', 35.7345409, -78.87242, 'pumpkin', 1),
+  H('orange', 12, 'Jacks Graveyard of Gourds', '218 Vatersay Dr, Apex, NC 27502', 35.7288235, -78.8719006, 'pumpkin'),
+
+  H('purple', 1, 'Pilot Mountain Home for the Insane', '2118 Pilot Mountain Ct, Apex, NC 27502', 35.7179645, -78.8943835, 'pumpkin', 2),
+  H('purple', 2, 'Twelve Feet Under', '2300 Pilot Mountain Ct, Apex, NC 27502', 35.717275, -78.8946235, 'candycorn'),
+  H('purple', 3, 'Haunted Hill', '2787 Milano Avenue, Apex, NC 27502', 35.71582, -78.9153258, 'pumpkin', 1),
+  H('purple', 4, 'Fright Lights of New Hill', '3743 Regent Pines Dr, New Hill, NC 27562', 35.6825178, -78.9555214, 'candycorn', 2),
+  H('purple', 5, 'Deer Creepy', '3453 Barn Rd, Apex, NC 27502', 35.7360023, -78.9455098, 'pumpkin', 1),
+  H('purple', 6, 'Skeleton Social Club of Apex', '2746 Willow Rock Ln, Apex, NC 27523', 35.7758738, -78.9153372, 'pumpkin', 1),
+  H('purple', 7, 'Haunted House on Duggins Pt', '541 Duggins Pt, Apex, NC 27523', 35.7619447, -78.8936936, 'pumpkin'),
+  H('purple', 8, 'Arachnophobia', '105 Windy Creek Ln, Apex, NC 27502', 35.736231, -78.8991039, 'pumpkin'),
+  H('purple', 9, 'Haunting of Windy Creek', '110 Windy Creek Ln, Apex, NC 27502', 35.7367031, -78.8994115, 'pumpkin', 1),
+  H('purple', 10, 'All Hail the Pumpking!', '314 Evening Star Dr, Apex, NC 27502', 35.7379613, -78.9007298, 'pumpkin', 1),
+  H('purple', 11, 'Fear Street', '5001 Sunny Creek Ln, Apex, NC 27502', 35.7367257, -78.897101, 'pumpkin', 1),
+  H('purple', 12, 'Corpse Bride', '1002 Heathwood Dairy Rd, Apex, NC 27502', 35.7335303, -78.8834824, 'pumpkin', 1),
+  H('purple', 13, 'Swortz Family Cemetery', '1405 Big Leaf Loop, Apex, NC 27502', 35.7315866, -78.8786474, 'candycorn'),
+
+  H('green', 1, 'Frightful Projections and Ghostly Graveyard', '1679 Padstone Dr, Apex, NC 27502', 35.7128122, -78.8687275, 'pumpkin'),
+  H('green', 2, 'The Nightmare Before Lexington', '1209 Lexington Farm Rd, Apex, NC 27502', 35.7116713, -78.8556495, 'candycorn'),
+  H('green', 3, 'Hynus Haunted Cemetery', '1114 Lexington Farm Rd, Apex, NC 27502', 35.7124943, -78.8546864, 'candycorn'),
+  H('green', 4, 'Nightmare on Straywhite', '711 Straywhite Ave, Apex, NC 27539', 35.6898985, -78.826104, 'pumpkin', 1),
+  H('green', 5, 'Day of the Dead', '2404 Pilsley Rd, Apex, NC 27539', 35.6944864, -78.8312439, 'candycorn', 1),
+  H('green', 6, "Creepy Crawler's Corner", '2301 Eagles Watch Ct, Apex, NC 27502', 35.7283121, -78.8202807, 'candycorn', 1),
+  H('green', 7, 'Downtown Apex Businesses', '220 N Salem St, Apex, NC 27502', 35.7318505, -78.8500337, ['pumpkin', 'candycorn'], 1),
+  H('green', 8, 'Giants of the Grave', '1300 Edwards Pond Ct, Apex, NC 27502', 35.7345257, -78.8584129, 'candycorn', 1),
+  H('green', 9, 'The Howling Fields', '1609 Grappenhall Dr, Apex, NC 27502', 35.7273638, -78.8681115, 'ghost'),
+  H('green', 10, 'Kraken', '1307 Applethorn Dr, Apex, NC 27502', 35.7252566, -78.8674293, 'pumpkin'),
+  H('green', 11, 'The Apex Ghostbuster House', '115 Homegate Cir, Apex, NC 27502', 35.7267689, -78.873392, 'pumpkin'),
+  H('green', 12, 'The Upside Down', '318 Village Loop Dr, Apex, NC 27502', 35.7275767, -78.8774004, 'pumpkin', 1),
+  H('green', 13, 'Greyfriars Cemetery', '401 Magdala Pl, Apex, NC 27502', 35.724843, -78.878113, 'ghost', 1),
+];
+const BY_ID = Object.fromEntries(HOUSES.map(h => [h.id, h]));
+const MAX_STOPS = 10; // Google Maps: destination + 9 waypoints
+
+// ---------------------------------------------------------------------------
+// State (persisted per browser)
+// ---------------------------------------------------------------------------
+const STORE_KEY = 'tour-of-frights-2026';
+const state = {
+  selected: [],                  // house ids (set semantics; order is computed)
+  done: new Set(),
+  filters: { ratings: { candycorn: true, pumpkin: true, ghost: true }, flash: 'all', hideDone: false },
+  lastRoute: null,               // { url, ids }
+};
+let userLoc = null;
+
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+    if (!s) return;
+    state.selected = (s.selected || []).filter(id => BY_ID[id]);
+    state.done = new Set((s.done || []).filter(id => BY_ID[id]));
+    if (s.filters) {
+      Object.assign(state.filters.ratings, s.filters.ratings);
+      if (['all', 'noIntense', 'none'].includes(s.filters.flash)) state.filters.flash = s.filters.flash;
+      state.filters.hideDone = !!s.filters.hideDone;
+    }
+    if (s.lastRoute && s.lastRoute.url) state.lastRoute = s.lastRoute;
+  } catch (e) { /* storage unavailable or corrupt: start fresh */ }
+}
+function save() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      selected: state.selected, done: [...state.done], filters: state.filters, lastRoute: state.lastRoute,
+    }));
+  } catch (e) { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
+// Route ordering: nearest neighbour + 2-opt on straight-line distance.
+// With a known location the path starts there; otherwise the best open path.
+// ---------------------------------------------------------------------------
+function dist(a, b) {
+  const r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(x));
+}
+function pathLen(seq) { let s = 0; for (let i = 1; i < seq.length; i++) s += dist(seq[i - 1], seq[i]); return s; }
+function nearestNeighbour(start, pts) {
+  const seq = [start], left = pts.filter(p => p !== start);
+  while (left.length) {
+    const last = seq[seq.length - 1];
+    let bi = 0;
+    for (let i = 1; i < left.length; i++) if (dist(last, left[i]) < dist(last, left[bi])) bi = i;
+    seq.push(left.splice(bi, 1)[0]);
+  }
+  return seq;
+}
+function twoOpt(seq, lo) {
+  let improved = true;
+  while (improved) {
+    improved = false;
+    for (let i = lo; i < seq.length - 1; i++) {
+      for (let k = i + 1; k < seq.length; k++) {
+        const a = seq[i - 1], b = seq[i], c = seq[k], e = seq[k + 1];
+        const before = (a ? dist(a, b) : 0) + (e ? dist(c, e) : 0);
+        const after = (a ? dist(a, c) : 0) + (e ? dist(b, e) : 0);
+        if (after < before - 1e-9) {
+          const mid = seq.slice(i, k + 1).reverse();
+          seq.splice(i, mid.length, ...mid);
+          improved = true;
+        }
+      }
+    }
+  }
+  return seq;
+}
+function optimize(houses, start) {
+  if (houses.length < 2) return houses.slice();
+  if (start) return twoOpt(nearestNeighbour(start, houses), 1).slice(1);
+  let best = null;
+  for (const h of houses) {
+    const seq = twoOpt(nearestNeighbour(h, houses), 0);
+    if (!best || pathLen(seq) < pathLen(best)) best = seq;
+  }
+  return best;
+}
+
+function mapsUrl(order) {
+  if (!order.length) return null;
+  const enc = encodeURIComponent;
+  const dest = order[order.length - 1].addr;
+  const wps = order.slice(0, -1).map(h => h.addr).join('|');
+  // Origin omitted on purpose: Google Maps starts from the device's current location.
+  return 'https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + enc(dest) +
+    (wps ? '&waypoints=' + enc(wps) : '');
+}
+
+// ---------------------------------------------------------------------------
+// Rendering helpers
+// ---------------------------------------------------------------------------
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const icon = (r, cls = '') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${r}"/></svg>`;
+const short = h => h.addr.split(',')[0];
+const bolts = h => h.flash ? `<span class="bolt" title="${h.flash === 2 ? 'Fast or intense' : 'Slow or low'} flashing lights">${'⚡'.repeat(h.flash)}</span>` : '';
+const isSel = id => state.selected.includes(id);
+
+function visible(h) {
+  if (isSel(h.id)) return true;
+  const f = state.filters;
+  if (f.hideDone && state.done.has(h.id)) return false;
+  if (!h.rating.some(r => f.ratings[r])) return false;
+  if (f.flash === 'noIntense' && h.flash === 2) return false;
+  if (f.flash === 'none' && h.flash > 0) return false;
+  return true;
+}
+
+function pinHtml(h, orderNum) {
+  const cls = ['pin', isSel(h.id) && 'sel', state.done.has(h.id) && 'done', h.id === focusId && 'focus', spread && spread.ids.has(h.id) && 'fanned'].filter(Boolean).join(' ');
+  return `<div class="${cls}" style="--c:${ROUTES[h.route].color}">
+    ${icon(h.rating[0], 'main')}${h.rating[1] ? icon(h.rating[1], 'second') : ''}
+    <span class="num">${orderNum || ''}</span>
+    ${h.flash ? `<span class="flash">${'⚡'.repeat(h.flash)}</span>` : ''}
+  </div>`;
+}
+
+function cardHtml(h) {
+  const sel = isSel(h.id), done = state.done.has(h.id);
+  const tags = h.rating.map(r => `<span class="tag">${icon(r)}${RATINGS[r].label} · ${RATINGS[r].age}</span>`).join('') +
+    (h.flash ? `<span class="tag warn">${'⚡'.repeat(h.flash)} ${h.flash === 2 ? 'Fast or intense' : 'Slow or low'} flashing</span>` : '');
+  return `<div class="card" style="--c:${ROUTES[h.route].color}">
+    <span class="ico-wrap">${icon(h.rating[0])}</span>
+    <div>
+      <h3>${esc(h.name)}</h3>
+      <div class="meta"><b>${ROUTES[h.route].label} #${h.n}</b> · ${esc(short(h))}</div>
+    </div>
+    <button class="icon-btn close" data-act="unfocus" aria-label="Close house details">×</button>
+    <div class="more">
+    <div class="tags">${tags}</div>
+    <div class="card-actions">
+      <button class="btn ${sel ? '' : 'primary'}" data-act="toggle" data-id="${h.id}">${sel ? 'Remove from route' : 'Add to route'}</button>
+      <button class="btn" data-act="done" data-id="${h.id}">${done ? 'Not visited' : 'Mark visited'}</button>
+    </div>
+    </div>
+  </div>`;
+}
+
+function rowHtml(h, { orderNum } = {}) {
+  const sel = isSel(h.id), done = state.done.has(h.id);
+  const lead = orderNum ? `<span class="ord">${orderNum}</span>` : '';
+  const actions = orderNum
+    ? `<button class="icon-btn" data-act="toggle" data-id="${h.id}" title="Remove from route" aria-label="Remove ${esc(h.name)} from route">×</button>`
+    : `<button class="icon-btn add" data-act="toggle" data-id="${h.id}" aria-pressed="${sel}" title="${sel ? 'Remove from' : 'Add to'} route" aria-label="${sel ? 'Remove' : 'Add'} ${esc(h.name)} ${sel ? 'from' : 'to'} route">${sel ? '✓' : '+'}</button>
+       <button class="icon-btn seen" data-act="done" data-id="${h.id}" aria-pressed="${done}" title="${done ? 'Visited (tap to undo)' : 'Mark visited'}" aria-label="${done ? 'Unmark' : 'Mark'} ${esc(h.name)} visited">seen</button>`;
+  return `<li class="row ${done ? 'is-done' : ''}">
+    ${lead}
+    <button class="row-main" data-act="focus" data-id="${h.id}">
+      <span class="ico-wrap" style="--c:${ROUTES[h.route].color}">${icon(h.rating[0])}</span>
+      <span class="row-text"><b>${esc(h.name)}</b><small>${esc(short(h))}</small></span>
+      ${bolts(h)}
+    </button>
+    ${actions}
+  </li>`;
+}
+
+// ---------------------------------------------------------------------------
+// Map
+// ---------------------------------------------------------------------------
+const map = L.map('map', { zoomControl: true, attributionControl: true });
+// Esri Dark Gray Canvas: no API key needed. Base layer plus a separate street-label layer.
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/';
+L.tileLayer(ESRI + 'World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, maxNativeZoom: 16,
+  attribution: 'Tiles &copy; Esri, HERE, Garmin, &copy; OpenStreetMap contributors',
+}).addTo(map);
+L.tileLayer(ESRI + 'World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, maxNativeZoom: 16, pane: 'shadowPane',
+}).addTo(map);
+
+const markers = {};
+for (const h of HOUSES) {
+  const m = L.marker([h.lat, h.lng], { title: h.name, riseOnHover: true, keyboard: true });
+  m.on('click', () => onPinClick(h.id));
+  markers[h.id] = m;
+}
+const routeLine = L.polyline([], { color: '#3de8ff', weight: 3, opacity: .75, dashArray: '6 8', interactive: false }).addTo(map);
+let youMarker = null;
+
+// The house whose details show in the panel card (last pin tapped or list row clicked).
+let focusId = null;
+map.on('click', () => {
+  unspread();
+  if (focusId) { focusId = null; render(); }
+});
+
+// ---------------------------------------------------------------------------
+// Fan out overlapping pins. Tapping a pin that overlaps others spreads the
+// group around its centre (legs point to the true spots); the next tap on a
+// spread pin selects it. Big jumbles zoom in instead.
+// ---------------------------------------------------------------------------
+const OVERLAP_PX = 36, MAX_FAN = 12;
+let spread = null; // { ids: Set, layer }
+
+function clusterAt(id) {
+  const vis = HOUSES.filter(h => map.hasLayer(markers[h.id]));
+  const pts = Object.fromEntries(vis.map(h => [h.id, map.latLngToLayerPoint([h.lat, h.lng])]));
+  const out = [id], seen = new Set(out);
+  for (let i = 0; i < out.length; i++) {
+    for (const h of vis) {
+      if (!seen.has(h.id) && pts[h.id].distanceTo(pts[out[i]]) < OVERLAP_PX) { seen.add(h.id); out.push(h.id); }
+    }
+  }
+  return out;
+}
+
+function fanOut(ids) {
+  const pts = ids.map(id => map.latLngToLayerPoint([BY_ID[id].lat, BY_ID[id].lng]));
+  const c = pts.reduce((a, p) => a.add(p), L.point(0, 0)).divideBy(pts.length);
+  const n = ids.length, spots = [];
+  if (n <= 8) {
+    const r = Math.max(42, 50 * n / (2 * Math.PI));
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI / 2 + 2 * Math.PI * i / n;
+      spots.push(c.add(L.point(r * Math.cos(a), r * Math.sin(a))));
+    }
+  } else {
+    let len = 34, a = 0;
+    for (let i = 0; i < n; i++) {
+      a += 48 / len;
+      spots.push(c.add(L.point(len * Math.cos(a), len * Math.sin(a))));
+      len += 2 * Math.PI * 8 / a;
+    }
+  }
+  // Hand out spots in angular order so the legs don't cross much.
+  const ang = p => (Math.atan2(p.y - c.y, p.x - c.x) + 2.5 * Math.PI) % (2 * Math.PI);
+  const order = ids.map((id, i) => i).sort((i, j) => ang(pts[i]) - ang(pts[j]));
+  const layer = L.layerGroup().addTo(map);
+  order.forEach((k, i) => {
+    const h = BY_ID[ids[k]], ll = map.layerPointToLatLng(spots[i]);
+    L.polyline([[h.lat, h.lng], ll], { color: '#fff', weight: 1.5, opacity: .55, interactive: false }).addTo(layer);
+    L.circleMarker([h.lat, h.lng], { radius: 3, color: '#fff', weight: 1, fillColor: '#fff', fillOpacity: 1, interactive: false }).addTo(layer);
+    markers[h.id].setLatLng(ll);
+  });
+  spread = { ids: new Set(ids), layer };
+  map.getContainer().classList.add('fanning');
+  render();
+}
+
+function unspread() {
+  if (!spread) return;
+  spread.ids.forEach(id => markers[id].setLatLng([BY_ID[id].lat, BY_ID[id].lng]));
+  spread.layer.remove();
+  spread = null;
+  map.getContainer().classList.remove('fanning');
+  render();
+}
+map.on('zoomstart', unspread);
+
+function onPinClick(id) {
+  if (!spread || !spread.ids.has(id)) {
+    unspread();
+    const ids = clusterAt(id);
+    if (ids.length > MAX_FAN) { map.flyTo([BY_ID[id].lat, BY_ID[id].lng], map.getZoom() + 2, { duration: .6 }); return; }
+    if (ids.length > 1) { fanOut(ids); return; }
+  }
+  focusId = id;
+  toggle(id);
+}
+
+function fitAll() {
+  const mobile = matchMedia('(max-width: 860px)').matches;
+  const pad = mobile ? document.getElementById('panel').offsetHeight : 0;
+  map.fitBounds(L.latLngBounds(HOUSES.map(h => [h.lat, h.lng])), {
+    paddingTopLeft: [24, 24], paddingBottomRight: [24, 24 + pad],
+  });
+}
+
+const MapButtons = L.Control.extend({
+  options: { position: 'topleft' },
+  onAdd() {
+    const bar = L.DomUtil.create('div', 'leaflet-bar');
+    bar.innerHTML = `<a href="#" class="map-btn" id="locate" title="Use my location" aria-label="Use my location" role="button">◎</a>
+      <a href="#" class="map-btn" id="fit" title="Show all houses" aria-label="Show all houses" role="button">⤢</a>`;
+    L.DomEvent.disableClickPropagation(bar);
+    return bar;
+  },
+});
+new MapButtons().addTo(map);
+
+function locate(silent) {
+  if (!navigator.geolocation) { if (!silent) toast('Location is not available in this browser.'); return; }
+  navigator.geolocation.getCurrentPosition(pos => {
+    userLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    if (!youMarker) youMarker = L.marker([userLoc.lat, userLoc.lng], {
+      icon: L.divIcon({ className: '', html: '<div class="you"></div>', iconSize: [16, 16] }),
+      interactive: false, keyboard: false, zIndexOffset: -100,
+    }).addTo(map);
+    else youMarker.setLatLng([userLoc.lat, userLoc.lng]);
+    document.getElementById('locate').classList.add('on');
+    if (!silent) map.panTo([userLoc.lat, userLoc.lng]);
+    render();
+  }, err => {
+    if (!silent) toast(err.code === 1 ? 'Location permission was denied.' : 'Could not get your location.');
+  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+}
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
+function toggle(id) {
+  state.selected = isSel(id) ? state.selected.filter(x => x !== id) : [...state.selected, id];
+  render();
+}
+function toggleDone(id) {
+  state.done.has(id) ? state.done.delete(id) : state.done.add(id);
+  render();
+}
+
+let toastTimer;
+function toast(msg, actionLabel, action) {
+  const el = document.getElementById('toast'), btn = document.getElementById('toast-btn');
+  document.getElementById('toast-msg').textContent = msg;
+  btn.hidden = !actionLabel;
+  btn.textContent = actionLabel || '';
+  btn.onclick = () => { el.classList.remove('show'); action && action(); };
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), actionLabel ? 8000 : 3500);
+}
+
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
+let currentOrder = [];
+
+function render() {
+  const sel = state.selected.map(id => BY_ID[id]);
+  currentOrder = optimize(sel, userLoc);
+  const orderOf = Object.fromEntries(currentOrder.map((h, i) => [h.id, i + 1]));
+
+  // Markers
+  for (const h of HOUSES) {
+    const m = markers[h.id];
+    m.setIcon(L.divIcon({ className: '', html: pinHtml(h, orderOf[h.id]), iconSize: [40, 40], iconAnchor: [20, 20] }));
+    m.setZIndexOffset(spread && spread.ids.has(h.id) ? 2000 : isSel(h.id) ? 1000 : state.done.has(h.id) ? -500 : 0);
+    if (visible(h)) m.addTo(map); else m.remove();
+  }
+  const pts = currentOrder.map(h => [h.lat, h.lng]);
+  if (userLoc && pts.length) pts.unshift([userLoc.lat, userLoc.lng]);
+  routeLine.setLatLngs(pts.length > 1 ? pts : []);
+  document.getElementById('card').innerHTML = focusId ? cardHtml(BY_ID[focusId]) : '';
+
+  // Summary
+  const n = currentOrder.length;
+  document.getElementById('count').innerHTML = n
+    ? `<b>${n}</b> stop${n === 1 ? '' : 's'} picked`
+    : 'Tap houses on the map to start building a route';
+  const open = document.getElementById('open');
+  const url = mapsUrl(currentOrder);
+  if (url) { open.href = url; open.removeAttribute('aria-disabled'); }
+  else { open.removeAttribute('href'); open.setAttribute('aria-disabled', 'true'); }
+
+  const warn = document.getElementById('warning');
+  warn.hidden = n <= MAX_STOPS;
+  warn.textContent = `Google Maps handles about ${MAX_STOPS} stops per link, so stops after #${MAX_STOPS} may be dropped. Consider two shorter routes.`;
+
+  const hint = document.getElementById('hint');
+  const parts = [];
+  if (n > 1) parts.push(userLoc ? 'Ordered from your location.' : 'Ordered for the shortest drive. <button data-act="locate">Start from my location</button>');
+  if (state.lastRoute) parts.push(`<a href="${esc(state.lastRoute.url)}" target="_blank" rel="noopener" style="color:var(--accent)">Reopen last route ↗</a>`);
+  hint.innerHTML = parts.join(' ');
+  hint.hidden = !parts.length;
+
+  // Route list
+  document.getElementById('route').innerHTML = n
+    ? currentOrder.map((h, i) => rowHtml(h, { orderNum: i + 1 })).join('')
+    : '<p class="empty">No stops yet. Tap a pin on the map or use + below.</p>';
+  document.getElementById('clear-wrap').innerHTML = n ? '<button class="btn" data-act="clear" style="padding:3px 10px;font-size:12.5px">Clear</button>' : '';
+
+  // Filters
+  const f = state.filters;
+  document.getElementById('rating-chips').innerHTML = Object.entries(RATINGS).map(([k, r]) =>
+    `<button class="chip" data-rating="${k}" aria-pressed="${f.ratings[k]}">${icon(k)}${r.label} <small>${r.age}</small></button>`).join('');
+  document.querySelectorAll('#flash-seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.flash === f.flash));
+  document.getElementById('hide-done').checked = f.hideDone;
+  const shown = HOUSES.filter(visible).length;
+  document.getElementById('showing').textContent = `Showing ${shown} of ${HOUSES.length} · ${state.done.size} visited`;
+
+  // All stops, grouped by town route
+  const groups = document.getElementById('groups');
+  const openGroups = new Set([...groups.querySelectorAll('details[open]')].map(d => d.dataset.route));
+  if (!groups.children.length) Object.keys(ROUTES).forEach(r => openGroups.add(r));
+  groups.innerHTML = Object.entries(ROUTES).map(([key, r]) => {
+    const list = HOUSES.filter(h => h.route === key && visible(h));
+    return `<details class="group" data-route="${key}" ${openGroups.has(key) ? 'open' : ''}>
+      <summary style="--c:${r.color}"><span class="swatch"></span>${r.label} route <small>${list.length} shown</small></summary>
+      <ul class="stops">${list.map(h => rowHtml(h)).join('') || '<li class="empty">All filtered out.</li>'}</ul>
+    </details>`;
+  }).join('');
+
+  save();
+}
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-act], [data-rating], [data-flash]');
+  if (!t) return;
+  const id = t.dataset.id;
+  if (t.dataset.rating) { const r = state.filters.ratings; r[t.dataset.rating] = !r[t.dataset.rating]; render(); return; }
+  if (t.dataset.flash) { state.filters.flash = t.dataset.flash; render(); return; }
+  switch (t.dataset.act) {
+    case 'toggle': toggle(id); break;
+    case 'done': toggleDone(id); break;
+    case 'clear': state.selected = []; render(); break;
+    case 'locate': locate(false); break;
+    case 'unfocus': focusId = null; render(); break;
+    case 'focus': {
+      const h = BY_ID[id];
+      map.setView([h.lat, h.lng], Math.max(map.getZoom(), 15));
+      focusId = id;
+      render();
+      if (matchMedia('(max-width: 860px)').matches) setExpanded(false);
+      break;
+    }
+  }
+});
+
+document.getElementById('hide-done').addEventListener('change', e => { state.filters.hideDone = e.target.checked; render(); });
+document.getElementById('locate').addEventListener('click', e => { e.preventDefault(); locate(false); });
+document.getElementById('fit').addEventListener('click', e => { e.preventDefault(); fitAll(); });
+
+document.getElementById('open').addEventListener('click', () => {
+  if (!currentOrder.length) return;
+  const ids = currentOrder.map(h => h.id);
+  const prev = { selected: state.selected.slice(), done: new Set(state.done) };
+  state.lastRoute = { url: mapsUrl(currentOrder), ids };
+  ids.forEach(id => state.done.add(id));
+  state.selected = [];
+  // Let the link navigate first, then update the page.
+  setTimeout(() => {
+    render();
+    toast(`Marked ${ids.length} house${ids.length === 1 ? '' : 's'} visited.`, 'Undo', () => {
+      state.selected = prev.selected; state.done = prev.done; render();
+    });
+  }, 0);
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  if (!state.done.size) { toast('No houses are marked visited.'); return; }
+  if (confirm(`Clear "visited" from all ${state.done.size} houses?`)) { state.done.clear(); state.lastRoute = null; render(); }
+});
+
+function setExpanded(on) {
+  document.getElementById('panel').dataset.expanded = on;
+  const b = document.getElementById('expand');
+  b.setAttribute('aria-expanded', on);
+  b.textContent = on ? 'Less ▾' : 'More ▴';
+}
+document.getElementById('expand').addEventListener('click', () =>
+  setExpanded(document.getElementById('panel').dataset.expanded !== 'true'));
+
+window.addEventListener('resize', () => map.invalidateSize());
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+load();
+render();
+fitAll();
+// Only use location automatically if permission was already granted, to avoid a prompt on load.
+if (navigator.permissions && navigator.permissions.query) {
+  navigator.permissions.query({ name: 'geolocation' }).then(p => { if (p.state === 'granted') locate(true); }).catch(() => {});
+}
+</script>
+</body>
+</html>
