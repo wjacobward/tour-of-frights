@@ -81,11 +81,6 @@
   .btn.primary:hover { filter: brightness(1.08); }
   .btn[aria-disabled="true"] { opacity: .4; pointer-events: none; }
   .expand { display: none; }
-  .warning {
-    margin-top: 10px; padding: 8px 10px; border-radius: 8px;
-    background: rgba(255,210,63,.1); border: 1px solid rgba(255,210,63,.4);
-    color: var(--warn); font-size: 13px;
-  }
   .hint { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
   .hint button { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; }
 
@@ -100,6 +95,9 @@
   .empty { color: var(--muted); font-size: 13.5px; margin: 0; }
 
   ol.route, ul.stops { list-style: none; margin: 0; padding: 0; }
+  .leg-head { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 1px; margin: 10px 0 2px; }
+  .leg-head:first-child { margin-top: 0; }
   .row { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
   .row-main {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
@@ -298,7 +296,6 @@
       <a class="btn primary" id="open" target="_blank" rel="noopener">Open in Google Maps ↗</a>
       <button class="btn expand" id="expand" aria-expanded="false" aria-controls="body">More ▴</button>
     </div>
-    <div class="warning" id="warning" hidden></div>
     <div class="hint" id="hint"></div>
     <div id="card" aria-live="polite"></div>
   </div>
@@ -320,6 +317,11 @@
       </div>
       <label class="switch"><input type="checkbox" id="hide-done"> Hide houses I've visited</label>
       <label class="switch"><input type="checkbox" id="spread"> Spread out overlapping pins</label>
+      <div class="filter-label">Stops per Google Maps link</div>
+      <div class="seg" id="leg-seg" role="group" aria-label="Stops per Google Maps link">
+        <button data-leg="4">4 · phones</button>
+        <button data-leg="10">10 · desktop</button>
+      </div>
     </section>
 
     <section class="section">
@@ -330,7 +332,7 @@
     <div class="footer">
       <p>⚡ slow or low flashing lights · ⚡⚡ fast or intense flashing lights.</p>
       <p>With “Spread out overlapping pins” on, crowded pins are nudged apart. A dashed ring means a pin was moved; its line leads to the house's real spot.</p>
-      <p>Opening a route marks its houses visited. Use “seen” on any stop to change that by hand. Saved in this browser only.</p>
+      <p>Long routes are split into legs, because Google Maps limits stops per link. Opening a leg marks its houses visited. Use “seen” on any stop to change that by hand. Saved in this browser only.</p>
       <button class="btn" id="reset">Reset visited houses</button>
       <p style="margin-top:14px">Unofficial planner, not affiliated with the Town of Apex. House list from the town's 2026 Tour of Frights flyer.</p>
     </div>
@@ -401,7 +403,9 @@ const HOUSES = [
   H('green', 13, 'Greyfriars Cemetery', '401 Magdala Pl, Apex, NC 27502', 35.724843, -78.878113, 'ghost', 1),
 ];
 const BY_ID = Object.fromEntries(HOUSES.map(h => [h.id, h]));
-const MAX_STOPS = 10; // Google Maps: destination + 9 waypoints
+// Google Maps takes 9 waypoints + destination per link on desktop, but phones
+// often get only 3 + destination, even in the app. Longer routes become legs.
+const legSize = () => state.filters.legSize || (matchMedia('(pointer: coarse)').matches ? 4 : 10);
 
 // ---------------------------------------------------------------------------
 // State (persisted per browser)
@@ -410,8 +414,9 @@ const STORE_KEY = 'tour-of-frights-2026';
 const state = {
   selected: [],                  // house ids (set semantics; order is computed)
   done: new Set(),
-  filters: { ratings: { candycorn: true, pumpkin: true, ghost: true }, flash: 'all', hideDone: false, spread: false },
+  filters: { ratings: { candycorn: true, pumpkin: true, ghost: true }, flash: 'all', hideDone: false, spread: false, legSize: 0 }, // legSize 0 = by device
   lastRoute: null,               // { url, ids }
+  legStart: null,                // house id where the last opened leg ends
 };
 let userLoc = null;
 
@@ -426,14 +431,16 @@ function load() {
       if (['all', 'noIntense', 'none'].includes(s.filters.flash)) state.filters.flash = s.filters.flash;
       state.filters.hideDone = !!s.filters.hideDone;
       state.filters.spread = !!s.filters.spread;
+      if ([4, 10].includes(s.filters.legSize)) state.filters.legSize = s.filters.legSize;
     }
     if (s.lastRoute && s.lastRoute.url) state.lastRoute = s.lastRoute;
+    if (BY_ID[s.legStart]) state.legStart = s.legStart;
   } catch (e) { /* storage unavailable or corrupt: start fresh */ }
 }
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      selected: state.selected, done: [...state.done], filters: state.filters, lastRoute: state.lastRoute,
+      selected: state.selected, done: [...state.done], filters: state.filters, lastRoute: state.lastRoute, legStart: state.legStart,
     }));
   } catch (e) { /* ignore */ }
 }
@@ -682,6 +689,7 @@ function locate(silent) {
     }).addTo(map);
     else youMarker.setLatLng([userLoc.lat, userLoc.lng]);
     document.getElementById('locate').classList.add('on');
+    if (!silent) state.legStart = null;
     if (!silent) map.panTo([userLoc.lat, userLoc.lng]);
     render();
   }, err => {
@@ -716,11 +724,21 @@ function toast(msg, actionLabel, action) {
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
-let currentOrder = [];
+let currentOrder = [], routeLegs = [];
+
+// Where the route starts: the end of the last opened leg, else the user's location.
+function routeStart() {
+  if (state.legStart && !isSel(state.legStart)) return BY_ID[state.legStart];
+  return userLoc;
+}
 
 function render() {
   const sel = state.selected.map(id => BY_ID[id]);
-  currentOrder = optimize(sel, userLoc);
+  const start = routeStart();
+  currentOrder = optimize(sel, start);
+  const size = legSize();
+  routeLegs = [];
+  for (let i = 0; i < currentOrder.length; i += size) routeLegs.push(currentOrder.slice(i, i + size));
   const orderOf = Object.fromEntries(currentOrder.map((h, i) => [h.id, i + 1]));
 
   // Markers
@@ -735,35 +753,41 @@ function render() {
   }
   // Route preview follows the pins as drawn, so it lines up with nudged pins.
   const pts = currentOrder.map(h => markers[h.id].getLatLng());
-  if (userLoc && pts.length) pts.unshift([userLoc.lat, userLoc.lng]);
+  if (start && pts.length) pts.unshift([start.lat, start.lng]);
   routeLine.setLatLngs(pts.length > 1 ? pts : []);
   document.getElementById('card').innerHTML = focusId ? cardHtml(BY_ID[focusId]) : '';
 
   // Summary
   const n = currentOrder.length;
-  document.getElementById('count').innerHTML = n
-    ? `<b>${n}</b> stop${n === 1 ? '' : 's'} picked`
-    : 'Tap houses on the map to start building a route';
+  document.getElementById('count').innerHTML = !n
+    ? 'Tap houses on the map to start building a route'
+    : `<b>${n}</b> stop${n === 1 ? '' : 's'} ${state.legStart ? 'left' : 'picked'}` + (routeLegs.length > 1 ? ` · ${routeLegs.length} legs` : '');
   const open = document.getElementById('open');
-  const url = mapsUrl(currentOrder);
+  const url = routeLegs.length ? mapsUrl(routeLegs[0]) : null;
   if (url) { open.href = url; open.removeAttribute('aria-disabled'); }
   else { open.removeAttribute('href'); open.setAttribute('aria-disabled', 'true'); }
-
-  const warn = document.getElementById('warning');
-  warn.hidden = n <= MAX_STOPS;
-  warn.textContent = `Google Maps handles about ${MAX_STOPS} stops per link, so stops after #${MAX_STOPS} may be dropped. Consider two shorter routes.`;
+  open.textContent = routeLegs.length > 1 ? `Open next ${routeLegs[0].length} stops ↗` : 'Open in Google Maps ↗';
 
   const hint = document.getElementById('hint');
   const parts = [];
-  if (n > 1) parts.push(userLoc ? 'Ordered from your location.' : 'Ordered for the shortest drive. <button data-act="locate">Start from my location</button>');
-  if (state.lastRoute) parts.push(`<a href="${esc(state.lastRoute.url)}" target="_blank" rel="noopener" style="color:var(--accent)">Reopen last route ↗</a>`);
+  if (n && start && start.id === state.legStart) {
+    parts.push(`Continuing from ${esc(start.name)}, where your last leg ended. <button data-act="locate">Start from my location</button>`);
+  } else if (n > 1) {
+    parts.push(userLoc ? 'Ordered from your location.' : 'Ordered for the shortest drive. <button data-act="locate">Start from my location</button>');
+  }
+  if (state.lastRoute) parts.push(`<a href="${esc(state.lastRoute.url)}" target="_blank" rel="noopener" style="color:var(--accent)">Reopen last leg ↗</a>`);
   hint.innerHTML = parts.join(' ');
   hint.hidden = !parts.length;
 
   // Route list
-  document.getElementById('route').innerHTML = n
-    ? currentOrder.map((h, i) => rowHtml(h, { orderNum: i + 1 })).join('')
-    : '<p class="empty">No stops yet. Tap a pin on the map or use + below.</p>';
+  document.getElementById('route').innerHTML = !n
+    ? '<p class="empty">No stops yet. Tap a pin on the map or use + below.</p>'
+    : routeLegs.map((leg, k) => {
+        const first = k * size + 1;
+        const head = routeLegs.length > 1
+          ? `<li class="leg-head">Leg ${k + 1} · stop${leg.length > 1 ? `s ${first}–${first + leg.length - 1}` : ` ${first}`}${k === 0 ? ' · next' : ''}</li>` : '';
+        return head + leg.map((h, i) => rowHtml(h, { orderNum: first + i })).join('');
+      }).join('');
   document.getElementById('clear-wrap').innerHTML = n ? '<button class="btn" data-act="clear" style="padding:3px 10px;font-size:12.5px">Clear</button>' : '';
 
   // Filters
@@ -773,6 +797,7 @@ function render() {
   document.querySelectorAll('#flash-seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.flash === f.flash));
   document.getElementById('hide-done').checked = f.hideDone;
   document.getElementById('spread').checked = f.spread;
+  document.querySelectorAll('#leg-seg button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.leg === size));
   const shown = HOUSES.filter(visible).length;
   document.getElementById('showing').textContent = `Showing ${shown} of ${HOUSES.length} · ${state.done.size} visited`;
 
@@ -795,15 +820,16 @@ function render() {
 // Events
 // ---------------------------------------------------------------------------
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-act], [data-rating], [data-flash]');
+  const t = e.target.closest('[data-act], [data-rating], [data-flash], [data-leg]');
   if (!t) return;
   const id = t.dataset.id;
   if (t.dataset.rating) { const r = state.filters.ratings; r[t.dataset.rating] = !r[t.dataset.rating]; render(); return; }
   if (t.dataset.flash) { state.filters.flash = t.dataset.flash; render(); return; }
+  if (t.dataset.leg) { state.filters.legSize = +t.dataset.leg; render(); return; }
   switch (t.dataset.act) {
     case 'toggle': toggle(id); break;
     case 'done': toggleDone(id); break;
-    case 'clear': state.selected = []; render(); break;
+    case 'clear': state.selected = []; state.legStart = null; render(); break;
     case 'locate': locate(false); break;
     case 'unfocus': focusId = null; render(); break;
     case 'focus': {
@@ -822,25 +848,28 @@ document.getElementById('spread').addEventListener('change', e => { state.filter
 document.getElementById('locate').addEventListener('click', e => { e.preventDefault(); locate(false); });
 document.getElementById('fit').addEventListener('click', e => { e.preventDefault(); fitAll(); });
 
+// Opening a route opens the next leg only: those houses are marked visited and
+// leave the route, and the rest is re-ordered from where that leg ends.
 document.getElementById('open').addEventListener('click', () => {
-  if (!currentOrder.length) return;
-  const ids = currentOrder.map(h => h.id);
-  const prev = { selected: state.selected.slice(), done: new Set(state.done) };
-  state.lastRoute = { url: mapsUrl(currentOrder), ids };
+  if (!routeLegs.length) return;
+  const leg = routeLegs[0], ids = leg.map(h => h.id);
+  const prev = { selected: state.selected.slice(), done: new Set(state.done), legStart: state.legStart };
+  state.lastRoute = { url: mapsUrl(leg), ids };
   ids.forEach(id => state.done.add(id));
-  state.selected = [];
+  state.selected = state.selected.filter(id => !ids.includes(id));
+  state.legStart = state.selected.length ? ids[ids.length - 1] : null;
   // Let the link navigate first, then update the page.
   setTimeout(() => {
     render();
     toast(`Marked ${ids.length} house${ids.length === 1 ? '' : 's'} visited.`, 'Undo', () => {
-      state.selected = prev.selected; state.done = prev.done; render();
+      state.selected = prev.selected; state.done = prev.done; state.legStart = prev.legStart; render();
     });
   }, 0);
 });
 
 document.getElementById('reset').addEventListener('click', () => {
   if (!state.done.size) { toast('No houses are marked visited.'); return; }
-  if (confirm(`Clear "visited" from all ${state.done.size} houses?`)) { state.done.clear(); state.lastRoute = null; render(); }
+  if (confirm(`Clear "visited" from all ${state.done.size} houses?`)) { state.done.clear(); state.lastRoute = null; state.legStart = null; render(); }
 });
 
 function setExpanded(on) {
