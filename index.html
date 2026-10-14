@@ -317,11 +317,6 @@
       </div>
       <label class="switch"><input type="checkbox" id="hide-done"> Hide houses I've visited</label>
       <label class="switch"><input type="checkbox" id="spread"> Spread out overlapping pins</label>
-      <div class="filter-label">Stops per Google Maps link</div>
-      <div class="seg" id="leg-seg" role="group" aria-label="Stops per Google Maps link">
-        <button data-leg="4">4 · phones</button>
-        <button data-leg="10">10 · desktop</button>
-      </div>
     </section>
 
     <section class="section">
@@ -332,7 +327,7 @@
     <div class="footer">
       <p>⚡ slow or low flashing lights · ⚡⚡ fast or intense flashing lights.</p>
       <p>With “Spread out overlapping pins” on, crowded pins are nudged apart. A dashed ring means a pin was moved; its line leads to the house's real spot.</p>
-      <p>Long routes are split into legs, because Google Maps limits stops per link. Opening a leg marks its houses visited. Use “seen” on any stop to change that by hand. Saved in this browser only.</p>
+      <p>Routes over 10 stops are split into legs, because Google Maps allows at most 10 stops per link. Opening a leg marks its houses visited. Use “seen” on any stop to change that by hand. Saved in this browser only.</p>
       <button class="btn" id="reset">Reset visited houses</button>
       <p style="margin-top:14px">Unofficial planner, not affiliated with the Town of Apex. House list from the town's 2026 Tour of Frights flyer.</p>
     </div>
@@ -403,9 +398,8 @@ const HOUSES = [
   H('green', 13, 'Greyfriars Cemetery', '401 Magdala Pl, Apex, NC 27502', 35.724843, -78.878113, 'ghost', 1),
 ];
 const BY_ID = Object.fromEntries(HOUSES.map(h => [h.id, h]));
-// Google Maps takes 9 waypoints + destination per link on desktop, but phones
-// often get only 3 + destination, even in the app. Longer routes become legs.
-const legSize = () => state.filters.legSize || (matchMedia('(pointer: coarse)').matches ? 4 : 10);
+// Google Maps takes at most 9 waypoints + destination per link; longer routes become legs.
+const LEG_SIZE = 10;
 
 // ---------------------------------------------------------------------------
 // State (persisted per browser)
@@ -414,7 +408,7 @@ const STORE_KEY = 'tour-of-frights-2026';
 const state = {
   selected: [],                  // house ids (set semantics; order is computed)
   done: new Set(),
-  filters: { ratings: { candycorn: true, pumpkin: true, ghost: true }, flash: 'all', hideDone: false, spread: false, legSize: 0 }, // legSize 0 = by device
+  filters: { ratings: { candycorn: true, pumpkin: true, ghost: true }, flash: 'all', hideDone: false, spread: false },
   lastRoute: null,               // { url, ids }
   legStart: null,                // house id where the last opened leg ends
 };
@@ -431,7 +425,6 @@ function load() {
       if (['all', 'noIntense', 'none'].includes(s.filters.flash)) state.filters.flash = s.filters.flash;
       state.filters.hideDone = !!s.filters.hideDone;
       state.filters.spread = !!s.filters.spread;
-      if ([4, 10].includes(s.filters.legSize)) state.filters.legSize = s.filters.legSize;
     }
     if (s.lastRoute && s.lastRoute.url) state.lastRoute = s.lastRoute;
     if (BY_ID[s.legStart]) state.legStart = s.legStart;
@@ -736,7 +729,7 @@ function render() {
   const sel = state.selected.map(id => BY_ID[id]);
   const start = routeStart();
   currentOrder = optimize(sel, start);
-  const size = legSize();
+  const size = LEG_SIZE;
   routeLegs = [];
   for (let i = 0; i < currentOrder.length; i += size) routeLegs.push(currentOrder.slice(i, i + size));
   const orderOf = Object.fromEntries(currentOrder.map((h, i) => [h.id, i + 1]));
@@ -797,7 +790,6 @@ function render() {
   document.querySelectorAll('#flash-seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.flash === f.flash));
   document.getElementById('hide-done').checked = f.hideDone;
   document.getElementById('spread').checked = f.spread;
-  document.querySelectorAll('#leg-seg button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.leg === size));
   const shown = HOUSES.filter(visible).length;
   document.getElementById('showing').textContent = `Showing ${shown} of ${HOUSES.length} · ${state.done.size} visited`;
 
@@ -820,12 +812,11 @@ function render() {
 // Events
 // ---------------------------------------------------------------------------
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-act], [data-rating], [data-flash], [data-leg]');
+  const t = e.target.closest('[data-act], [data-rating], [data-flash]');
   if (!t) return;
   const id = t.dataset.id;
   if (t.dataset.rating) { const r = state.filters.ratings; r[t.dataset.rating] = !r[t.dataset.rating]; render(); return; }
   if (t.dataset.flash) { state.filters.flash = t.dataset.flash; render(); return; }
-  if (t.dataset.leg) { state.filters.legSize = +t.dataset.leg; render(); return; }
   switch (t.dataset.act) {
     case 'toggle': toggle(id); break;
     case 'done': toggleDone(id); break;
