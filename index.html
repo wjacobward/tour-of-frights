@@ -51,7 +51,7 @@
     min-height: 0;
   }
   .peek { padding: 16px 18px 14px; border-bottom: 1px solid var(--line); }
-  .brand { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .brand h1 { white-space: nowrap; }
   .brand h1 {
     font: 400 30px/1.05 var(--display);
     color: var(--orange);
@@ -59,7 +59,7 @@
     letter-spacing: .5px;
     text-shadow: 0 0 18px rgba(255,138,31,.35);
   }
-  .brand .when { color: var(--muted); font-size: 12.5px; text-align: right; white-space: nowrap; }
+  .brand .when { color: var(--muted); font-size: 13px; margin-top: 4px; }
   .summary { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
   .count { flex: 1; min-width: 120px; color: var(--muted); }
   .count b { color: var(--text); font-size: 17px; }
@@ -291,7 +291,7 @@
     <div class="grip" aria-hidden="true"></div>
     <div class="brand">
       <h1>Apex Tour of Frights</h1>
-      <div class="when">Apex, NC · Oct 10–31<br>Nightly 6–9 pm</div>
+      <div class="when">Oct 10–31 · Nightly 6–9 pm</div>
     </div>
     <div class="summary">
       <div class="count" id="count" aria-live="polite"></div>
