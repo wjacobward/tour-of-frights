@@ -184,7 +184,6 @@
   .pin.sel .num { display: block; }
   .pin.done { filter: grayscale(1) brightness(.75); opacity: .5; }
   .pin.done.sel { opacity: .85; }
-  .fanning .pin:not(.fanned) { opacity: .25; }
   .pin.focus { outline: 2px solid #fff; outline-offset: 4px; }
   .leaflet-marker-icon:focus-visible .pin { outline: 2px solid #fff; outline-offset: 3px; }
   .you { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 3px solid #fff;
@@ -328,7 +327,7 @@
 
     <div class="footer">
       <p>⚡ slow or low flashing lights · ⚡⚡ fast or intense flashing lights.</p>
-      <p>Pins too close to tap? Tap the group to fan it out.</p>
+      <p>Crowded pins are nudged apart; a thin line points to each house's real spot.</p>
       <p>Opening a route marks its houses visited. Use “seen” on any stop to change that by hand. Saved in this browser only.</p>
       <button class="btn" id="reset">Reset visited houses</button>
     </div>
@@ -515,7 +514,7 @@ function visible(h) {
 }
 
 function pinHtml(h, orderNum) {
-  const cls = ['pin', isSel(h.id) && 'sel', state.done.has(h.id) && 'done', h.id === focusId && 'focus', spread && spread.ids.has(h.id) && 'fanned'].filter(Boolean).join(' ');
+  const cls = ['pin', isSel(h.id) && 'sel', state.done.has(h.id) && 'done', h.id === focusId && 'focus'].filter(Boolean).join(' ');
   return `<div class="${cls}" style="--c:${ROUTES[h.route].color}">
     ${icon(h.rating[0], 'main')}${h.rating[1] ? icon(h.rating[1], 'second') : ''}
     <span class="num">${orderNum || ''}</span>
@@ -579,7 +578,7 @@ L.tileLayer(ESRI + 'World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
 const markers = {};
 for (const h of HOUSES) {
   const m = L.marker([h.lat, h.lng], { title: h.name, riseOnHover: true, keyboard: true });
-  m.on('click', () => onPinClick(h.id));
+  m.on('click', () => { focusId = h.id; toggle(h.id); });
   markers[h.id] = m;
 }
 const routeLine = L.polyline([], { color: '#3de8ff', weight: 3, opacity: .75, dashArray: '6 8', interactive: false }).addTo(map);
@@ -587,84 +586,48 @@ let youMarker = null;
 
 // The house whose details show in the panel card (last pin tapped or list row clicked).
 let focusId = null;
-map.on('click', () => {
-  unspread();
-  if (focusId) { focusId = null; render(); }
-});
+map.on('click', () => { if (focusId) { focusId = null; render(); } });
 
 // ---------------------------------------------------------------------------
-// Fan out overlapping pins. Tapping a pin that overlaps others spreads the
-// group around its centre (legs point to the true spots); the next tap on a
-// spread pin selects it. Big jumbles zoom in instead.
+// Declutter: at the current zoom, push overlapping pins apart just far enough
+// to tap each one. A leg and dot mark the true spot of any pin that moved.
 // ---------------------------------------------------------------------------
-const OVERLAP_PX = 36, MAX_FAN = 12;
-let spread = null; // { ids: Set, layer }
+const PIN_GAP = 42; // px between pin centres (pins are 40px)
+const legs = L.layerGroup().addTo(map);
 
-function clusterAt(id) {
-  const vis = HOUSES.filter(h => map.hasLayer(markers[h.id]));
-  const pts = Object.fromEntries(vis.map(h => [h.id, map.latLngToLayerPoint([h.lat, h.lng])]));
-  const out = [id], seen = new Set(out);
-  for (let i = 0; i < out.length; i++) {
-    for (const h of vis) {
-      if (!seen.has(h.id) && pts[h.id].distanceTo(pts[out[i]]) < OVERLAP_PX) { seen.add(h.id); out.push(h.id); }
+function layoutPins() {
+  const z = map.getZoom();
+  if (z === undefined) return;
+  const shown = HOUSES.filter(h => map.hasLayer(markers[h.id]));
+  const anchor = shown.map(h => map.project([h.lat, h.lng], z));
+  const pos = anchor.map(p => p.clone());
+  for (let it = 0; it < 300; it++) {
+    let moved = false;
+    for (let i = 0; i < pos.length; i++) {
+      for (let j = i + 1; j < pos.length; j++) {
+        let dx = pos[j].x - pos[i].x, dy = pos[j].y - pos[i].y, d = Math.hypot(dx, dy);
+        if (d >= PIN_GAP) continue;
+        if (d < 1e-6) { const a = i * 2.39996 + j; dx = Math.cos(a); dy = Math.sin(a); d = 1; } // same spot: pick a stable direction
+        const push = (PIN_GAP - d) / 2 + 0.01;
+        dx /= d; dy /= d;
+        pos[i].x -= dx * push; pos[i].y -= dy * push;
+        pos[j].x += dx * push; pos[j].y += dy * push;
+        moved = true;
+      }
     }
+    if (!moved) break;
   }
-  return out;
-}
-
-function fanOut(ids) {
-  const pts = ids.map(id => map.latLngToLayerPoint([BY_ID[id].lat, BY_ID[id].lng]));
-  const c = pts.reduce((a, p) => a.add(p), L.point(0, 0)).divideBy(pts.length);
-  const n = ids.length, spots = [];
-  if (n <= 8) {
-    const r = Math.max(42, 50 * n / (2 * Math.PI));
-    for (let i = 0; i < n; i++) {
-      const a = -Math.PI / 2 + 2 * Math.PI * i / n;
-      spots.push(c.add(L.point(r * Math.cos(a), r * Math.sin(a))));
-    }
-  } else {
-    let len = 34, a = 0;
-    for (let i = 0; i < n; i++) {
-      a += 48 / len;
-      spots.push(c.add(L.point(len * Math.cos(a), len * Math.sin(a))));
-      len += 2 * Math.PI * 8 / a;
-    }
-  }
-  // Hand out spots in angular order so the legs don't cross much.
-  const ang = p => (Math.atan2(p.y - c.y, p.x - c.x) + 2.5 * Math.PI) % (2 * Math.PI);
-  const order = ids.map((id, i) => i).sort((i, j) => ang(pts[i]) - ang(pts[j]));
-  const layer = L.layerGroup().addTo(map);
-  order.forEach((k, i) => {
-    const h = BY_ID[ids[k]], ll = map.layerPointToLatLng(spots[i]);
-    L.polyline([[h.lat, h.lng], ll], { color: '#fff', weight: 1.5, opacity: .55, interactive: false }).addTo(layer);
-    L.circleMarker([h.lat, h.lng], { radius: 3, color: '#fff', weight: 1, fillColor: '#fff', fillOpacity: 1, interactive: false }).addTo(layer);
+  legs.clearLayers();
+  shown.forEach((h, i) => {
+    const ll = map.unproject(pos[i], z);
     markers[h.id].setLatLng(ll);
+    if (pos[i].distanceTo(anchor[i]) > 4) {
+      L.polyline([[h.lat, h.lng], ll], { color: '#fff', weight: 1.5, opacity: .45, interactive: false }).addTo(legs);
+      L.circleMarker([h.lat, h.lng], { radius: 3, color: '#fff', weight: 1, fillColor: '#fff', fillOpacity: .9, interactive: false }).addTo(legs);
+    }
   });
-  spread = { ids: new Set(ids), layer };
-  map.getContainer().classList.add('fanning');
-  render();
 }
-
-function unspread() {
-  if (!spread) return;
-  spread.ids.forEach(id => markers[id].setLatLng([BY_ID[id].lat, BY_ID[id].lng]));
-  spread.layer.remove();
-  spread = null;
-  map.getContainer().classList.remove('fanning');
-  render();
-}
-map.on('zoomstart', unspread);
-
-function onPinClick(id) {
-  if (!spread || !spread.ids.has(id)) {
-    unspread();
-    const ids = clusterAt(id);
-    if (ids.length > MAX_FAN) { map.flyTo([BY_ID[id].lat, BY_ID[id].lng], map.getZoom() + 2, { duration: .6 }); return; }
-    if (ids.length > 1) { fanOut(ids); return; }
-  }
-  focusId = id;
-  toggle(id);
-}
+map.on('zoomend', render);
 
 function fitAll() {
   const mobile = matchMedia('(max-width: 860px)').matches;
@@ -741,10 +704,12 @@ function render() {
   for (const h of HOUSES) {
     const m = markers[h.id];
     m.setIcon(L.divIcon({ className: '', html: pinHtml(h, orderOf[h.id]), iconSize: [40, 40], iconAnchor: [20, 20] }));
-    m.setZIndexOffset(spread && spread.ids.has(h.id) ? 2000 : isSel(h.id) ? 1000 : state.done.has(h.id) ? -500 : 0);
+    m.setZIndexOffset(isSel(h.id) ? 1000 : state.done.has(h.id) ? -500 : 0);
     if (visible(h)) m.addTo(map); else m.remove();
   }
-  const pts = currentOrder.map(h => [h.lat, h.lng]);
+  layoutPins();
+  // Route preview follows the pins as drawn, so it lines up with nudged pins.
+  const pts = currentOrder.map(h => markers[h.id].getLatLng());
   if (userLoc && pts.length) pts.unshift([userLoc.lat, userLoc.lng]);
   routeLine.setLatLngs(pts.length > 1 ? pts : []);
   document.getElementById('card').innerHTML = focusId ? cardHtml(BY_ID[focusId]) : '';
