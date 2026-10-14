@@ -184,6 +184,7 @@
   .pin.sel .num { display: block; }
   .pin.done { filter: grayscale(1) brightness(.75); opacity: .5; }
   .pin.done.sel { opacity: .85; }
+  .pin.moved { border-style: dashed; }
   .pin.focus { outline: 2px solid #fff; outline-offset: 4px; }
   .leaflet-marker-icon:focus-visible .pin { outline: 2px solid #fff; outline-offset: 3px; }
   .you { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 3px solid #fff;
@@ -327,7 +328,7 @@
 
     <div class="footer">
       <p>⚡ slow or low flashing lights · ⚡⚡ fast or intense flashing lights.</p>
-      <p>Crowded pins are nudged apart; a thin line points to each house's real spot.</p>
+      <p>Crowded pins are nudged apart. A dashed ring means a pin was moved; its line leads to the house's real spot.</p>
       <p>Opening a route marks its houses visited. Use “seen” on any stop to change that by hand. Saved in this browser only.</p>
       <button class="btn" id="reset">Reset visited houses</button>
     </div>
@@ -514,7 +515,7 @@ function visible(h) {
 }
 
 function pinHtml(h, orderNum) {
-  const cls = ['pin', isSel(h.id) && 'sel', state.done.has(h.id) && 'done', h.id === focusId && 'focus'].filter(Boolean).join(' ');
+  const cls = ['pin', isSel(h.id) && 'sel', state.done.has(h.id) && 'done', h.id === focusId && 'focus', movedIds.has(h.id) && 'moved'].filter(Boolean).join(' ');
   return `<div class="${cls}" style="--c:${ROUTES[h.route].color}">
     ${icon(h.rating[0], 'main')}${h.rating[1] ? icon(h.rating[1], 'second') : ''}
     <span class="num">${orderNum || ''}</span>
@@ -592,36 +593,50 @@ map.on('click', () => { if (focusId) { focusId = null; render(); } });
 // Declutter: at the current zoom, push overlapping pins apart just far enough
 // to tap each one. A leg and dot mark the true spot of any pin that moved.
 // ---------------------------------------------------------------------------
-const PIN_GAP = 42; // px between pin centres (pins are 40px)
+const PIN_GAP = 42;   // px between pin centres (pins are 40px)
+const DOT_CLEAR = 27; // px a pin keeps from any house's true-spot dot
+const MOVED_PX = 21;  // beyond this a pin no longer covers its own spot: draw a leg
+let movedIds = new Set();
 const legs = L.layerGroup().addTo(map);
 
 function layoutPins() {
   const z = map.getZoom();
+  movedIds = new Set();
   if (z === undefined) return;
   const shown = HOUSES.filter(h => map.hasLayer(markers[h.id]));
   const anchor = shown.map(h => map.project([h.lat, h.lng], z));
-  const pos = anchor.map(p => p.clone());
-  for (let it = 0; it < 300; it++) {
-    let moved = false;
-    for (let i = 0; i < pos.length; i++) {
-      for (let j = i + 1; j < pos.length; j++) {
-        let dx = pos[j].x - pos[i].x, dy = pos[j].y - pos[i].y, d = Math.hypot(dx, dy);
-        if (d >= PIN_GAP) continue;
-        if (d < 1e-6) { const a = i * 2.39996 + j; dx = Math.cos(a); dy = Math.sin(a); d = 1; } // same spot: pick a stable direction
-        const push = (PIN_GAP - d) / 2 + 0.01;
-        dx /= d; dy /= d;
-        pos[i].x -= dx * push; pos[i].y -= dy * push;
-        pos[j].x += dx * push; pos[j].y += dy * push;
-        moved = true;
+  // Place pins one at a time, each at the nearest free spot to its true
+  // location: clear of pins already placed and of every other house's dot.
+  // Isolated houses go first, so they stay put; crowded ones move outward.
+  const near = i => anchor.filter(q => q.distanceTo(anchor[i]) < 3 * PIN_GAP).length;
+  const crowd = anchor.map((_, i) => near(i));
+  const order = anchor.map((_, i) => i).sort((i, j) => crowd[i] - crowd[j] || i - j);
+  const pos = [], placed = [];
+  const free = (p, i) =>
+    placed.every(k => pos[k].distanceTo(p) >= PIN_GAP) &&
+    anchor.every((q, j) => j === i || q.distanceTo(p) >= DOT_CLEAR);
+  for (const i of order) {
+    // Search rings around the true spot, trying the "outward" direction first.
+    const others = anchor.filter((q, j) => j !== i && q.distanceTo(anchor[i]) < 3 * PIN_GAP);
+    const c = others.length ? others.reduce((acc, q) => acc.add(q), L.point(0, 0)).divideBy(others.length) : anchor[i];
+    const a0 = Math.atan2(anchor[i].y - c.y, anchor[i].x - c.x) || 0;
+    let spot = free(anchor[i], i) ? anchor[i] : null;
+    for (let r = 4; !spot && r < 800; r += 4) {
+      for (let k = 0; k < 36 && !spot; k++) {
+        const a = a0 + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 18;
+        const p = anchor[i].add(L.point(r * Math.cos(a), r * Math.sin(a)));
+        if (free(p, i)) spot = p;
       }
     }
-    if (!moved) break;
+    pos[i] = spot || anchor[i];
+    placed.push(i);
   }
   legs.clearLayers();
   shown.forEach((h, i) => {
     const ll = map.unproject(pos[i], z);
     markers[h.id].setLatLng(ll);
-    if (pos[i].distanceTo(anchor[i]) > 4) {
+    if (pos[i].distanceTo(anchor[i]) > MOVED_PX) {
+      movedIds.add(h.id);
       L.polyline([[h.lat, h.lng], ll], { color: '#fff', weight: 1.5, opacity: .45, interactive: false }).addTo(legs);
       L.circleMarker([h.lat, h.lng], { radius: 3, color: '#fff', weight: 1, fillColor: '#fff', fillOpacity: .9, interactive: false }).addTo(legs);
     }
@@ -702,12 +717,14 @@ function render() {
 
   // Markers
   for (const h of HOUSES) {
+    if (visible(h)) markers[h.id].addTo(map); else markers[h.id].remove();
+  }
+  layoutPins();
+  for (const h of HOUSES) {
     const m = markers[h.id];
     m.setIcon(L.divIcon({ className: '', html: pinHtml(h, orderOf[h.id]), iconSize: [40, 40], iconAnchor: [20, 20] }));
     m.setZIndexOffset(isSel(h.id) ? 1000 : state.done.has(h.id) ? -500 : 0);
-    if (visible(h)) m.addTo(map); else m.remove();
   }
-  layoutPins();
   // Route preview follows the pins as drawn, so it lines up with nudged pins.
   const pts = currentOrder.map(h => markers[h.id].getLatLng());
   if (userLoc && pts.length) pts.unshift([userLoc.lat, userLoc.lng]);
