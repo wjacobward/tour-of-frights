@@ -5,10 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Apex Tour of Frights</title>
 <meta name="description" content="Pick houses from the Apex Tour of Frights and open a custom Google Maps route.">
+<meta name="theme-color" content="#0f0c14">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://wjacobward.github.io/tour-of-frights/">
+<meta property="og:title" content="Apex Tour of Frights route planner">
+<meta property="og:description" content="Map all 38 houses, filter by age rating and flashing lights, and open your route in Google Maps. Oct 10–31, nightly 6–9 pm.">
+<meta property="og:image" content="https://wjacobward.github.io/tour-of-frights/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Apex Tour of Frights route planner">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Creepster&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+  integrity="sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==" crossorigin="anonymous" referrerpolicy="no-referrer">
 <style>
   :root {
     --bg: #0f0c14;
@@ -230,7 +241,7 @@
   .card-actions .btn { padding: 7px 12px; font-size: 13.5px; flex: 1; justify-content: center; }
 
   .toast {
-    position: fixed; left: 50%; top: 16px; transform: translateX(-50%) translateY(-150%);
+    position: fixed; left: 50%; top: 16px; transform: translateX(-50%) translateY(calc(-100% - 48px));
     background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px;
     padding: 8px 8px 8px 16px; display: flex; align-items: center; gap: 12px;
     box-shadow: 0 6px 24px rgba(0,0,0,.5); z-index: 2000; transition: transform .25s;
@@ -274,6 +285,8 @@
     .sec-filters { order: -1; }
     .section, .footer { padding-left: 16px; padding-right: 16px; }
     .leaflet-top { top: env(safe-area-inset-top); }
+    /* Keep the map credits above the collapsed sheet. JS sets --peek-h. */
+    .leaflet-bottom { bottom: var(--peek-h, 0px); }
   }
   @media (min-width: 861px) { .grip { display: none; } }
 </style>
@@ -364,7 +377,8 @@
 
 <div class="toast" id="toast" role="status"><span id="toast-msg"></span><button class="btn" id="toast-btn" hidden></button></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"
+  integrity="sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
 // ---------------------------------------------------------------------------
 // Data: from the town's three Google Maps route links + the 2026 flyer PDF.
@@ -440,7 +454,10 @@ const state = {
   filters: { ratings: { candycorn: true, pumpkin: true, ghost: true }, flash: 'all', hideDone: false, spreadPins: true },
   lastRoute: null,               // { url, ids }
   legStart: null,                // house id where the last opened leg ends
+  legStartAt: 0,                 // when that leg was opened (ms)
 };
+// A leg end from an earlier night is no place to start from: past this, start fresh.
+const LEG_START_TTL = 6 * 60 * 60 * 1000;
 let userLoc = null;
 
 function load() {
@@ -456,13 +473,17 @@ function load() {
       if (typeof s.filters.spreadPins === 'boolean') state.filters.spreadPins = s.filters.spreadPins;
     }
     if (s.lastRoute && s.lastRoute.url) state.lastRoute = s.lastRoute;
-    if (BY_ID[s.legStart]) state.legStart = s.legStart;
+    if (BY_ID[s.legStart] && Date.now() - (s.legStartAt || 0) < LEG_START_TTL) {
+      state.legStart = s.legStart;
+      state.legStartAt = s.legStartAt;
+    }
   } catch (e) { /* storage unavailable or corrupt: start fresh */ }
 }
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      selected: state.selected, done: [...state.done], filters: state.filters, lastRoute: state.lastRoute, legStart: state.legStart,
+      selected: state.selected, done: [...state.done], filters: state.filters, lastRoute: state.lastRoute,
+      legStart: state.legStart, legStartAt: state.legStartAt,
     }));
   } catch (e) { /* ignore */ }
 }
@@ -611,6 +632,13 @@ const markers = {};
 for (const h of HOUSES) {
   const m = L.marker([h.lat, h.lng], { title: h.name, riseOnHover: true, keyboard: true });
   m.on('click', () => { focusId = h.id; toggle(h.id); });
+  // Leaflet only maps Enter to click on pins with popups, so handle the keyboard here.
+  m.on('keypress', e => {
+    const k = e.originalEvent.key;
+    if (k !== 'Enter' && k !== ' ') return;
+    e.originalEvent.preventDefault();
+    m.fire('click');
+  });
   markers[h.id] = m;
 }
 const routeLine = L.polyline([], { color: '#3de8ff', weight: 3, opacity: .75, dashArray: '6 8', interactive: false }).addTo(map);
@@ -680,13 +708,18 @@ function layoutPins() {
 }
 map.on('zoomend', render);
 
-function fitAll() {
-  const mobile = matchMedia('(max-width: 860px)').matches;
-  const pad = mobile ? document.getElementById('panel').offsetHeight : 0;
-  map.fitBounds(L.latLngBounds(HOUSES.map(h => [h.lat, h.lng])), {
-    paddingTopLeft: [24, 24], paddingBottomRight: [24, 24 + pad],
+// On phones, how much of the bottom of the map the sheet covers right now.
+// The sheet is always full height and slides down, so use what's on screen.
+function sheetCover() {
+  if (!phone.matches) return 0;
+  return panel.dataset.expanded === 'true' ? panel.offsetHeight : peek.offsetHeight;
+}
+function fitTo(latlngs, pad) {
+  map.fitBounds(L.latLngBounds(latlngs), {
+    paddingTopLeft: [pad, pad], paddingBottomRight: [pad, pad + sheetCover()],
   });
 }
+function fitAll() { fitTo(HOUSES.map(h => [h.lat, h.lng]), 44); } // pins are 40px wide
 
 const MapButtons = L.Control.extend({
   options: { position: 'topleft' },
@@ -744,7 +777,9 @@ function usePreset(route) {
   state.legStart = null;
   focusId = null;
   render();
-  map.fitBounds(L.latLngBounds(ids.map(id => [BY_ID[id].lat, BY_ID[id].lng]).concat(userLoc ? [[userLoc.lat, userLoc.lng]] : [])), { padding: [40, 40] });
+  // On phones, drop the sheet so the route is visible, then fit it above the peek.
+  if (phone.matches) setExpanded(false);
+  fitTo(ids.map(id => [BY_ID[id].lat, BY_ID[id].lng]).concat(userLoc ? [[userLoc.lat, userLoc.lng]] : []), 40);
   if (!userLoc) locate(true);
   const skipped = HOUSES.filter(h => h.route === route).length - ids.length;
   const msg = `${ROUTES[route].label} route: ${ids.length} stops` + (skipped ? ` (${skipped} skipped: visited or filtered out)` : '') + '.';
@@ -769,13 +804,40 @@ function toast(msg, actionLabel, action) {
 // ---------------------------------------------------------------------------
 let currentOrder = [], routeLegs = [];
 
+// Render runs on every zoom, so only touch markup that changed. Otherwise live
+// regions re-announce and keyboard focus is lost each time.
+const lastHtml = new WeakMap();
+function setHtml(el, html) {
+  if (lastHtml.get(el) === html) return;
+  lastHtml.set(el, html);
+  el.innerHTML = html;
+}
+
+// When the focused pin or button is redrawn, put focus back on its replacement.
+function focusKey() {
+  const a = document.activeElement;
+  if (!a || a === document.body) return null;
+  const pin = HOUSES.find(h => markers[h.id].getElement() === a);
+  if (pin) return { pin: pin.id };
+  const sel = ['act', 'id', 'route', 'rating'].filter(k => a.dataset[k]).map(k => `[data-${k}="${a.dataset[k]}"]`).join('');
+  const box = sel && a.closest('#panel [id]');
+  return box ? { box: box.id, sel } : null;
+}
+function restoreFocus(k) {
+  if (!k || (document.activeElement && document.activeElement !== document.body)) return;
+  const el = k.pin ? markers[k.pin].getElement() : document.getElementById(k.box)?.querySelector(k.sel);
+  if (el) el.focus({ preventScroll: true });
+}
+
 // Where the route starts: the end of the last opened leg, else the user's location.
 function routeStart() {
+  if (state.legStart && Date.now() - state.legStartAt >= LEG_START_TTL) state.legStart = null;
   if (state.legStart && !isSel(state.legStart)) return BY_ID[state.legStart];
   return userLoc;
 }
 
 function render() {
+  const fk = focusKey();
   const sel = state.selected.map(id => BY_ID[id]);
   const start = routeStart();
   currentOrder = optimize(sel, start);
@@ -790,21 +852,24 @@ function render() {
   }
   layoutPins();
   for (const h of HOUSES) {
-    const m = markers[h.id];
-    m.setIcon(L.divIcon({ className: '', html: pinHtml(h, orderOf[h.id]), iconSize: [40, 40], iconAnchor: [20, 20] }));
+    const m = markers[h.id], html = pinHtml(h, orderOf[h.id]);
+    if (lastHtml.get(m) !== html) {
+      lastHtml.set(m, html);
+      m.setIcon(L.divIcon({ className: '', html, iconSize: [40, 40], iconAnchor: [20, 20] }));
+    }
     m.setZIndexOffset(isSel(h.id) ? 1000 : state.done.has(h.id) ? -500 : 0);
   }
   // Route preview follows the pins as drawn, so it lines up with nudged pins.
   const pts = currentOrder.map(h => markers[h.id].getLatLng());
   if (start && pts.length) pts.unshift([start.lat, start.lng]);
   routeLine.setLatLngs(pts.length > 1 ? pts : []);
-  document.getElementById('card').innerHTML = focusId ? cardHtml(BY_ID[focusId]) : '';
+  setHtml(document.getElementById('card'), focusId ? cardHtml(BY_ID[focusId]) : '');
 
   // Summary
   const n = currentOrder.length;
-  document.getElementById('count').innerHTML = !n
+  setHtml(document.getElementById('count'), !n
     ? 'Tap houses on the map to start building a route'
-    : `<b>${n}</b> stop${n === 1 ? '' : 's'} ${state.legStart ? 'left' : 'picked'}` + (routeLegs.length > 1 ? ` · ${routeLegs.length} legs` : '');
+    : `<b>${n}</b> stop${n === 1 ? '' : 's'} ${state.legStart ? 'left' : 'picked'}` + (routeLegs.length > 1 ? ` · ${routeLegs.length} legs` : ''));
   const open = document.getElementById('open');
   const url = routeLegs.length ? mapsUrl(routeLegs[0]) : null;
   if (url) { open.href = url; open.removeAttribute('aria-disabled'); }
@@ -819,30 +884,30 @@ function render() {
     parts.push(userLoc ? 'Ordered from your location.' : 'Ordered for the shortest drive. <button data-act="locate">Start from my location</button>');
   }
   if (state.lastRoute) parts.push(`<a href="${esc(state.lastRoute.url)}" target="_blank" rel="noopener" style="color:var(--accent)">Reopen last route ↗</a>`);
-  hint.innerHTML = parts.join(' ');
+  setHtml(hint, parts.join(' '));
   hint.hidden = !parts.length;
 
   // Route list
-  document.getElementById('route').innerHTML = !n
+  setHtml(document.getElementById('route'), !n
     ? '<p class="empty">No stops yet. Tap a pin on the map or use + below.</p>'
     : routeLegs.map((leg, k) => {
         const first = k * size + 1;
         const head = routeLegs.length > 1
           ? `<li class="leg-head">Leg ${k + 1} · stop${leg.length > 1 ? `s ${first}–${first + leg.length - 1}` : ` ${first}`}${k === 0 ? ' · next' : ''}</li>` : '';
         return head + leg.map((h, i) => rowHtml(h, { orderNum: first + i })).join('');
-      }).join('');
-  document.getElementById('presets').innerHTML = Object.entries(ROUTES).map(([key, r]) => {
+      }).join(''));
+  setHtml(document.getElementById('presets'), Object.entries(ROUTES).map(([key, r]) => {
     const ids = presetIds(key);
     const on = ids.length > 0 && ids.length === state.selected.length && ids.every(isSel);
     return `<button class="btn preset" data-act="preset" data-route="${key}" style="--c:${r.color}" aria-pressed="${on}"${ids.length ? '' : ' aria-disabled="true"'}
       title="${ids.length ? `Route all ${ids.length} unvisited ${r.label} houses` : `No unvisited ${r.label} houses match your filters`}">${r.label} <small>${ids.length}</small></button>`;
-  }).join('');
-  document.getElementById('clear-wrap').innerHTML = n ? '<button class="btn" data-act="clear" style="padding:3px 10px;font-size:12.5px">Clear</button>' : '';
+  }).join(''));
+  setHtml(document.getElementById('clear-wrap'), n ? '<button class="btn" data-act="clear" style="padding:3px 10px;font-size:12.5px">Clear</button>' : '');
 
   // Filters
   const f = state.filters;
-  document.getElementById('rating-chips').innerHTML = Object.entries(RATINGS).map(([k, r]) =>
-    `<button class="chip" data-rating="${k}" aria-pressed="${f.ratings[k]}">${icon(k)}${r.label} <small>${r.age}</small></button>`).join('');
+  setHtml(document.getElementById('rating-chips'), Object.entries(RATINGS).map(([k, r]) =>
+    `<button class="chip" data-rating="${k}" aria-pressed="${f.ratings[k]}">${icon(k)}${r.label} <small>${r.age}</small></button>`).join(''));
   document.querySelectorAll('#flash-seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.flash === f.flash));
   document.getElementById('hide-done').checked = f.hideDone;
   document.getElementById('spread').checked = f.spreadPins;
@@ -853,14 +918,15 @@ function render() {
   const groups = document.getElementById('groups');
   const openGroups = new Set([...groups.querySelectorAll('details[open]')].map(d => d.dataset.route));
   if (!groups.children.length) Object.keys(ROUTES).forEach(r => openGroups.add(r));
-  groups.innerHTML = Object.entries(ROUTES).map(([key, r]) => {
+  setHtml(groups, Object.entries(ROUTES).map(([key, r]) => {
     const list = HOUSES.filter(h => h.route === key && visible(h));
     return `<details class="group" data-route="${key}" ${openGroups.has(key) ? 'open' : ''}>
       <summary style="--c:${r.color}"><span class="swatch"></span>${r.label} route <small>${list.length} shown</small></summary>
       <ul class="stops">${list.map(h => rowHtml(h)).join('') || '<li class="empty">All filtered out.</li>'}</ul>
     </details>`;
-  }).join('');
+  }).join(''));
 
+  restoreFocus(fk);
   save();
 }
 
@@ -901,16 +967,17 @@ document.getElementById('fit').addEventListener('click', e => { e.preventDefault
 document.getElementById('open').addEventListener('click', () => {
   if (!routeLegs.length) return;
   const leg = routeLegs[0], ids = leg.map(h => h.id);
-  const prev = { selected: state.selected.slice(), done: new Set(state.done), legStart: state.legStart };
+  const prev = { selected: state.selected.slice(), done: new Set(state.done), legStart: state.legStart, legStartAt: state.legStartAt };
   state.lastRoute = { url: mapsUrl(leg), ids };
   ids.forEach(id => state.done.add(id));
   state.selected = state.selected.filter(id => !ids.includes(id));
   state.legStart = state.selected.length ? ids[ids.length - 1] : null;
+  state.legStartAt = Date.now();
   // Let the link navigate first, then update the page.
   setTimeout(() => {
     render();
     toast(`Marked ${ids.length} house${ids.length === 1 ? '' : 's'} visited.`, 'Undo', () => {
-      state.selected = prev.selected; state.done = prev.done; state.legStart = prev.legStart; render();
+      state.selected = prev.selected; state.done = prev.done; state.legStart = prev.legStart; state.legStartAt = prev.legStartAt; render();
     });
   }, 0);
 });
@@ -939,7 +1006,10 @@ grip.addEventListener('click', () => { if (!justDragged) setExpanded(panel.datas
 
 // How far down the sheet slides when collapsed, so only the peek area shows.
 function collapsedOffset() { return Math.max(0, panel.offsetHeight - peek.offsetHeight); }
-function syncSheet() { panel.style.setProperty('--sheet-y', collapsedOffset() + 'px'); }
+function syncSheet() {
+  panel.style.setProperty('--sheet-y', collapsedOffset() + 'px');
+  document.body.style.setProperty('--peek-h', peek.offsetHeight + 'px');
+}
 new ResizeObserver(syncSheet).observe(peek);
 phone.addEventListener('change', () => setExpanded(panel.dataset.expanded === 'true'));
 
