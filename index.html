@@ -138,6 +138,19 @@
   details.group summary .swatch { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
   details.group summary small { color: var(--muted); font-weight: 400; }
 
+  /* Town route presets */
+  .presets { margin-bottom: 12px; }
+  .presets .filter-label { margin-top: 0; }
+  .preset-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .preset {
+    flex: 1; min-width: 96px; justify-content: center;
+    border-color: var(--c); padding: 7px 10px; font-size: 13.5px;
+  }
+  .preset::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+  .preset small { color: var(--muted); }
+  .preset[aria-pressed="true"] { background: color-mix(in srgb, var(--c) 22%, var(--panel-2)); font-weight: 700; }
+  .preset[aria-disabled="true"] { opacity: .4; }
+
   /* Filters */
   .chips { display: flex; gap: 8px; flex-wrap: wrap; }
   .chip {
@@ -314,6 +327,10 @@
   <div class="body" id="body">
     <section class="section sec-route">
       <h2>Your route <span class="aside" id="clear-wrap"></span></h2>
+      <div class="presets">
+        <div class="filter-label">Follow a town route, ordered from where you are</div>
+        <div class="preset-btns" id="presets"></div>
+      </div>
       <ol class="route" id="route"></ol>
     </section>
 
@@ -518,8 +535,8 @@ const short = h => h.addr.split(',')[0];
 const bolts = h => h.flash ? `<span class="bolt" title="${h.flash === 2 ? 'Fast or intense' : 'Slow or low'} flashing lights">${'⚡'.repeat(h.flash)}</span>` : '';
 const isSel = id => state.selected.includes(id);
 
-function visible(h) {
-  if (isSel(h.id)) return true;
+function visible(h) { return isSel(h.id) || passesFilters(h); }
+function passesFilters(h) {
   const f = state.filters;
   if (f.hideDone && state.done.has(h.id)) return false;
   if (!h.rating.some(r => f.ratings[r])) return false;
@@ -713,6 +730,28 @@ function toggleDone(id) {
   render();
 }
 
+// A town route's houses that match the filters and haven't been visited yet.
+function presetIds(route) {
+  return HOUSES.filter(h => h.route === route && passesFilters(h) && !state.done.has(h.id)).map(h => h.id);
+}
+// Replace the route with a whole town route. The optimizer orders it from the
+// user's location, so ask for that if we don't have it yet.
+function usePreset(route) {
+  const ids = presetIds(route);
+  if (!ids.length) { toast(`No unvisited ${ROUTES[route].label} houses match your filters.`); return; }
+  const prev = { selected: state.selected.slice(), legStart: state.legStart };
+  state.selected = ids;
+  state.legStart = null;
+  focusId = null;
+  render();
+  map.fitBounds(L.latLngBounds(ids.map(id => [BY_ID[id].lat, BY_ID[id].lng]).concat(userLoc ? [[userLoc.lat, userLoc.lng]] : [])), { padding: [40, 40] });
+  if (!userLoc) locate(true);
+  const skipped = HOUSES.filter(h => h.route === route).length - ids.length;
+  const msg = `${ROUTES[route].label} route: ${ids.length} stops` + (skipped ? ` (${skipped} skipped: visited or filtered out)` : '') + '.';
+  if (prev.selected.length) toast(msg, 'Undo', () => { state.selected = prev.selected; state.legStart = prev.legStart; render(); });
+  else toast(msg);
+}
+
 let toastTimer;
 function toast(msg, actionLabel, action) {
   const el = document.getElementById('toast'), btn = document.getElementById('toast-btn');
@@ -792,6 +831,12 @@ function render() {
           ? `<li class="leg-head">Leg ${k + 1} · stop${leg.length > 1 ? `s ${first}–${first + leg.length - 1}` : ` ${first}`}${k === 0 ? ' · next' : ''}</li>` : '';
         return head + leg.map((h, i) => rowHtml(h, { orderNum: first + i })).join('');
       }).join('');
+  document.getElementById('presets').innerHTML = Object.entries(ROUTES).map(([key, r]) => {
+    const ids = presetIds(key);
+    const on = ids.length > 0 && ids.length === state.selected.length && ids.every(isSel);
+    return `<button class="btn preset" data-act="preset" data-route="${key}" style="--c:${r.color}" aria-pressed="${on}"${ids.length ? '' : ' aria-disabled="true"'}
+      title="${ids.length ? `Route all ${ids.length} unvisited ${r.label} houses` : `No unvisited ${r.label} houses match your filters`}">${r.label} <small>${ids.length}</small></button>`;
+  }).join('');
   document.getElementById('clear-wrap').innerHTML = n ? '<button class="btn" data-act="clear" style="padding:3px 10px;font-size:12.5px">Clear</button>' : '';
 
   // Filters
@@ -833,6 +878,7 @@ document.addEventListener('click', e => {
     case 'done': toggleDone(id); break;
     case 'clear': state.selected = []; state.legStart = null; render(); break;
     case 'locate': locate(false); break;
+    case 'preset': usePreset(t.dataset.route); break;
     case 'unfocus': focusId = null; render(); break;
     case 'focus': {
       const h = BY_ID[id];
