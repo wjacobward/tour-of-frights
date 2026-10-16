@@ -94,9 +94,6 @@
   .empty { color: var(--muted); font-size: 13.5px; margin: 0; }
 
   ol.route, ul.stops { list-style: none; margin: 0; padding: 0; }
-  .leg-head { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase;
-    letter-spacing: 1px; margin: 10px 0 2px; }
-  .leg-head:first-child { margin-top: 0; }
   .row { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
   .row-main {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
@@ -355,7 +352,7 @@
     <div class="footer">
       <p>⚡ slow or low flashing lights · ⚡⚡ fast or intense flashing lights.</p>
       <p>With “Spread out overlapping pins” on, crowded pins are nudged apart. A dashed ring means a pin was moved; its line leads to the house's real spot.</p>
-      <p>Routes over 25 stops are split into legs. Opening a route marks its houses visited. Use “seen” on any stop to change that by hand. Saved in this browser only.</p>
+      <p>Opening a route in Google Maps marks its houses visited. Use “seen” on any stop to change that by hand. Saved in this browser only.</p>
       <button class="btn" id="reset">Reset visited houses</button>
       <p style="margin-top:14px">Unofficial planner, not affiliated with the Town of Apex. House list from the town's 2026 Tour of Frights flyer.</p>
     </div>
@@ -426,9 +423,6 @@ const HOUSES = [
   H('green', 13, 'Greyfriars Cemetery', '401 Magdala Pl, Apex, NC 27502', 35.724843, -78.878113, 'ghost', 1),
 ];
 const BY_ID = Object.fromEntries(HOUSES.map(h => [h.id, h]));
-// Path-style Maps links (like the town's own 13-stop links) aren't held to the
-// 10-stop cap of ?api=1 links. Very long routes are still split, to be safe.
-const LEG_SIZE = 25;
 
 // ---------------------------------------------------------------------------
 // State (persisted per browser)
@@ -439,7 +433,6 @@ const state = {
   done: new Set(),
   filters: { ratings: { candycorn: true, pumpkin: true, ghost: true }, flash: 'all', hideDone: false, spreadPins: true },
   lastRoute: null,               // { url, ids }
-  legStart: null,                // house id where the last opened leg ends
 };
 let userLoc = null;
 
@@ -456,13 +449,12 @@ function load() {
       if (typeof s.filters.spreadPins === 'boolean') state.filters.spreadPins = s.filters.spreadPins;
     }
     if (s.lastRoute && s.lastRoute.url) state.lastRoute = s.lastRoute;
-    if (BY_ID[s.legStart]) state.legStart = s.legStart;
   } catch (e) { /* storage unavailable or corrupt: start fresh */ }
 }
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      selected: state.selected, done: [...state.done], filters: state.filters, lastRoute: state.lastRoute, legStart: state.legStart,
+      selected: state.selected, done: [...state.done], filters: state.filters, lastRoute: state.lastRoute,
     }));
   } catch (e) { /* ignore */ }
 }
@@ -710,7 +702,6 @@ function locate(silent) {
     }).addTo(map);
     else youMarker.setLatLng([userLoc.lat, userLoc.lng]);
     document.getElementById('locate').classList.add('on');
-    if (!silent) state.legStart = null;
     if (!silent) map.panTo([userLoc.lat, userLoc.lng]);
     render();
   }, err => {
@@ -739,16 +730,15 @@ function presetIds(route) {
 function usePreset(route) {
   const ids = presetIds(route);
   if (!ids.length) { toast(`No unvisited ${ROUTES[route].label} houses match your filters.`); return; }
-  const prev = { selected: state.selected.slice(), legStart: state.legStart };
+  const prev = state.selected.slice();
   state.selected = ids;
-  state.legStart = null;
   focusId = null;
   render();
   map.fitBounds(L.latLngBounds(ids.map(id => [BY_ID[id].lat, BY_ID[id].lng]).concat(userLoc ? [[userLoc.lat, userLoc.lng]] : [])), { padding: [40, 40] });
   if (!userLoc) locate(true);
   const skipped = HOUSES.filter(h => h.route === route).length - ids.length;
   const msg = `${ROUTES[route].label} route: ${ids.length} stops` + (skipped ? ` (${skipped} skipped: visited or filtered out)` : '') + '.';
-  if (prev.selected.length) toast(msg, 'Undo', () => { state.selected = prev.selected; state.legStart = prev.legStart; render(); });
+  if (prev.length) toast(msg, 'Undo', () => { state.selected = prev; render(); });
   else toast(msg);
 }
 
@@ -767,21 +757,12 @@ function toast(msg, actionLabel, action) {
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
-let currentOrder = [], routeLegs = [];
-
-// Where the route starts: the end of the last opened leg, else the user's location.
-function routeStart() {
-  if (state.legStart && !isSel(state.legStart)) return BY_ID[state.legStart];
-  return userLoc;
-}
+let currentOrder = [];
 
 function render() {
   const sel = state.selected.map(id => BY_ID[id]);
-  const start = routeStart();
+  const start = userLoc;
   currentOrder = optimize(sel, start);
-  const size = LEG_SIZE;
-  routeLegs = [];
-  for (let i = 0; i < currentOrder.length; i += size) routeLegs.push(currentOrder.slice(i, i + size));
   const orderOf = Object.fromEntries(currentOrder.map((h, i) => [h.id, i + 1]));
 
   // Markers
@@ -804,18 +785,15 @@ function render() {
   const n = currentOrder.length;
   document.getElementById('count').innerHTML = !n
     ? 'Tap houses on the map to start building a route'
-    : `<b>${n}</b> stop${n === 1 ? '' : 's'} ${state.legStart ? 'left' : 'picked'}` + (routeLegs.length > 1 ? ` · ${routeLegs.length} legs` : '');
+    : `<b>${n}</b> stop${n === 1 ? '' : 's'} picked`;
   const open = document.getElementById('open');
-  const url = routeLegs.length ? mapsUrl(routeLegs[0]) : null;
+  const url = mapsUrl(currentOrder);
   if (url) { open.href = url; open.removeAttribute('aria-disabled'); }
   else { open.removeAttribute('href'); open.setAttribute('aria-disabled', 'true'); }
-  open.textContent = routeLegs.length > 1 ? `Open next ${routeLegs[0].length} stops ↗` : 'Open in Google Maps ↗';
 
   const hint = document.getElementById('hint');
   const parts = [];
-  if (n && start && start.id === state.legStart) {
-    parts.push(`Continuing from ${esc(start.name)}, where your last leg ended. <button data-act="locate">Start from my location</button>`);
-  } else if (n > 1) {
+  if (n > 1) {
     parts.push(userLoc ? 'Ordered from your location.' : 'Ordered for the shortest drive. <button data-act="locate">Start from my location</button>');
   }
   if (state.lastRoute) parts.push(`<a href="${esc(state.lastRoute.url)}" target="_blank" rel="noopener" style="color:var(--accent)">Reopen last route ↗</a>`);
@@ -825,12 +803,7 @@ function render() {
   // Route list
   document.getElementById('route').innerHTML = !n
     ? '<p class="empty">No stops yet. Tap a pin on the map or use + below.</p>'
-    : routeLegs.map((leg, k) => {
-        const first = k * size + 1;
-        const head = routeLegs.length > 1
-          ? `<li class="leg-head">Leg ${k + 1} · stop${leg.length > 1 ? `s ${first}–${first + leg.length - 1}` : ` ${first}`}${k === 0 ? ' · next' : ''}</li>` : '';
-        return head + leg.map((h, i) => rowHtml(h, { orderNum: first + i })).join('');
-      }).join('');
+    : currentOrder.map((h, i) => rowHtml(h, { orderNum: i + 1 })).join('');
   document.getElementById('presets').innerHTML = Object.entries(ROUTES).map(([key, r]) => {
     const ids = presetIds(key);
     const on = ids.length > 0 && ids.length === state.selected.length && ids.every(isSel);
@@ -876,7 +849,7 @@ document.addEventListener('click', e => {
   switch (t.dataset.act) {
     case 'toggle': toggle(id); break;
     case 'done': toggleDone(id); break;
-    case 'clear': state.selected = []; state.legStart = null; render(); break;
+    case 'clear': state.selected = []; render(); break;
     case 'locate': locate(false); break;
     case 'preset': usePreset(t.dataset.route); break;
     case 'unfocus': focusId = null; render(); break;
@@ -896,28 +869,26 @@ document.getElementById('spread').addEventListener('change', e => { state.filter
 document.getElementById('locate').addEventListener('click', e => { e.preventDefault(); locate(false); });
 document.getElementById('fit').addEventListener('click', e => { e.preventDefault(); fitAll(); });
 
-// Opening a route opens the next leg only: those houses are marked visited and
-// leave the route, and the rest is re-ordered from where that leg ends.
+// Opening a route marks its houses visited and clears it.
 document.getElementById('open').addEventListener('click', () => {
-  if (!routeLegs.length) return;
-  const leg = routeLegs[0], ids = leg.map(h => h.id);
-  const prev = { selected: state.selected.slice(), done: new Set(state.done), legStart: state.legStart };
-  state.lastRoute = { url: mapsUrl(leg), ids };
+  if (!currentOrder.length) return;
+  const ids = currentOrder.map(h => h.id);
+  const prev = { selected: state.selected.slice(), done: new Set(state.done) };
+  state.lastRoute = { url: mapsUrl(currentOrder), ids };
   ids.forEach(id => state.done.add(id));
-  state.selected = state.selected.filter(id => !ids.includes(id));
-  state.legStart = state.selected.length ? ids[ids.length - 1] : null;
+  state.selected = [];
   // Let the link navigate first, then update the page.
   setTimeout(() => {
     render();
     toast(`Marked ${ids.length} house${ids.length === 1 ? '' : 's'} visited.`, 'Undo', () => {
-      state.selected = prev.selected; state.done = prev.done; state.legStart = prev.legStart; render();
+      state.selected = prev.selected; state.done = prev.done; render();
     });
   }, 0);
 });
 
 document.getElementById('reset').addEventListener('click', () => {
   if (!state.done.size) { toast('No houses are marked visited.'); return; }
-  if (confirm(`Clear "visited" from all ${state.done.size} houses?`)) { state.done.clear(); state.lastRoute = null; state.legStart = null; render(); }
+  if (confirm(`Clear "visited" from all ${state.done.size} houses?`)) { state.done.clear(); state.lastRoute = null; render(); }
 });
 
 // ---------------------------------------------------------------------------
